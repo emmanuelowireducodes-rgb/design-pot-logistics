@@ -1,6 +1,6 @@
 # mypy: disable-error-code="attr-defined"
 import uuid
-from datetime import timedelta
+from datetime import datetime, time, timedelta
 from decimal import Decimal
 from unittest.mock import patch
 
@@ -52,8 +52,14 @@ class DeliveryRunTests(TestCase):
         distance.start()
         self.addCleanup(distance.stop)
 
-    def confirmed(self, *, area="Osu", service="standard", vehicle="bike", destination_zone=None, payment="paid"):
+    def confirmed(self, *, area="Osu", service="standard", vehicle="bike", destination_zone=None, payment="paid", premium_window_day=None):
         key = uuid.uuid4()
+        window_start = (
+            datetime.combine(premium_window_day, time(12))
+            if service == "premium" and premium_window_day
+            else timezone.now() + timedelta(hours=2)
+        )
+        window_end = window_start + timedelta(hours=1)
         delivery = workflow.save_booking(actor=self.client_user, data={
             "booking_key": str(key), "revision": 0,
             "pickup_address": "12 Oxford Street", "pickup_area": "Osu",
@@ -63,8 +69,8 @@ class DeliveryRunTests(TestCase):
             "destination_instructions": "Call at gate", "recipient_name": f"Recipient {area}",
             "recipient_phone": "+233200000000", "package_description": "Parcel",
             "instructions": "Keep dry", "vehicle_type": vehicle, "service": service,
-            "window_start": (timezone.now() + timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M") if service == "premium" else "",
-            "window_end": (timezone.now() + timedelta(hours=3)).strftime("%Y-%m-%dT%H:%M") if service == "premium" else "",
+            "window_start": window_start.strftime("%Y-%m-%dT%H:%M") if service == "premium" else "",
+            "window_end": window_end.strftime("%Y-%m-%dT%H:%M") if service == "premium" else "",
             "payment_method": payment, "cod_amount": "25.00" if payment == "cod" else "0",
         })
         workflow.confirm_quote(actor=self.client_user, quote_id=delivery.job.current_quote_id)
@@ -284,8 +290,9 @@ class DeliveryRunTests(TestCase):
         self.assertContains(self.client.get(f"/admin/dispatch/runs/{run.pk}/"), "Area grouping uses business-defined zones only")
 
     def test_premium_window_display_and_stale_run_order(self):
-        premium = self.confirmed(service="premium", area="Madina")
-        run = self.draft_run([premium])
+        run_day = timezone.localdate() + timedelta(days=1)
+        premium = self.confirmed(service="premium", area="Madina", premium_window_day=run_day)
+        run = self.draft_run([premium], day=run_day)
         self.release(run)
         run = self.start(run)
         self.client.force_login(self.admin)
