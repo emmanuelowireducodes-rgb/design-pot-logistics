@@ -1,5 +1,5 @@
 /* Never persist authenticated pages, APIs, maps, financial data or write requests. */
-const CACHE = 'design-pot-static-v3-0';
+const CACHE = 'design-pot-static-v3-1';
 const ASSETS = __ASSETS__;
 const OFFLINE = '/offline/';
 self.addEventListener('install', event => {

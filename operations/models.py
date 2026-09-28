@@ -392,6 +392,27 @@ class ProofOfDelivery(AppendOnly):
     policy_snapshot = models.JSONField(default=dict)
 
 
+class ClientSettlement(AppendOnly):
+    """Admin-recorded evidence that reconciled COD was remitted to one client."""
+
+    organization = models.ForeignKey(
+        Organization, on_delete=models.PROTECT, related_name="cod_settlements"
+    )
+    recorded_by = models.ForeignKey(User, on_delete=models.PROTECT, related_name="settlements_recorded")
+    reference = models.CharField(max_length=32, unique=True)
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    currency = models.CharField(max_length=3, default="GHS")
+    method = models.CharField(max_length=40, blank=True)
+    external_reference = models.CharField(max_length=120, blank=True)
+    note = models.CharField(max_length=500, blank=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["organization", "-created_at"])]
+        constraints = [
+            models.CheckConstraint(condition=Q(amount__gt=0), name="positive_client_settlement")
+        ]
+
+
 class LedgerEntry(AppendOnly):
     delivery = models.ForeignKey(Delivery, on_delete=models.PROTECT, related_name="ledger")
     actor = models.ForeignKey(User, on_delete=models.PROTECT)
@@ -412,12 +433,28 @@ class LedgerEntry(AppendOnly):
     )
     reference = models.CharField(max_length=120, blank=True)
     note = models.CharField(max_length=500, blank=True)
+    settlement = models.ForeignKey(
+        ClientSettlement, null=True, blank=True, on_delete=models.PROTECT, related_name="entries"
+    )
+    reconciled_entry = models.OneToOneField(
+        "self", null=True, blank=True, on_delete=models.PROTECT, related_name="settlement_entry"
+    )
 
     class Meta:
         constraints = [
-            models.CheckConstraint(condition=Q(amount__gt=0), name="positive_ledger_amount")
+            models.CheckConstraint(condition=Q(amount__gt=0), name="positive_ledger_amount"),
+            models.CheckConstraint(
+                condition=Q(
+                    kind="cod_settled", settlement__isnull=False, reconciled_entry__isnull=False
+                )
+                | (~Q(kind="cod_settled") & Q(settlement__isnull=True, reconciled_entry__isnull=True)),
+                name="settled_entry_links_reconciliation",
+            ),
         ]
-        indexes = [models.Index(fields=["kind", "created_at"])]
+        indexes = [
+            models.Index(fields=["kind", "created_at"]),
+            models.Index(fields=["delivery", "kind", "created_at"]),
+        ]
 
 
 class DomainEvent(AppendOnly):

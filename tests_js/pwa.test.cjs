@@ -40,7 +40,7 @@ test('offline navigation returns connection page rather than stale operational d
 test('write actions, unknown assets and cross-origin resources are not intercepted',()=>{
   const w=worker();
   for(const path of ['/deliveries/1/collect/','/locations/resolve/'])assert.equal(w.fetchEvent(path,'POST'),undefined);
-  for(const path of ['/locations/private/','/admin/finance/','/static/unknown.js','/static/app.hash.css?private=1'])assert.equal(w.fetchEvent(path),undefined);
+  for(const path of ['/locations/private/','/admin/finance/','/admin/finance/settlements/','/client/finance/','/admin/reports/revenue/','/static/unknown.js','/static/app.hash.css?private=1'])assert.equal(w.fetchEvent(path),undefined);
   let responded=false;w.listeners.fetch({request:{url:'https://external.example/private',method:'GET'},respondWith:()=>responded=true});
   assert.equal(responded,false);
 });

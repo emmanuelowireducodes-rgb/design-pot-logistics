@@ -8,7 +8,7 @@ ADMIN_NAV = [
     ("fleet", "Riders & drivers", "♧"),
     ("clients", "Clients", "◉"),
     ("live", "Live operations", "◎"),
-    ("finance", "COD & finance", "▣"),
+    ("finance", "Finance", "▣"),
     ("notifications", "Notifications", "♧"),
     ("reports", "Reports", "▥"),
     ("pricing", "Pricing", "≡"),
@@ -18,7 +18,7 @@ CLIENT_NAV = [
     ("dashboard", "Overview", "◫"),
     ("booking", "Create delivery", "+"),
     ("deliveries", "My deliveries", "▤"),
-    ("finance", "COD & payments", "▣"),
+    ("finance", "Finance", "▣"),
     ("notifications", "Notifications", "♧"),
     ("settings", "Account", "⚙"),
 ]

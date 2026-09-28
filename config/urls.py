@@ -1,9 +1,9 @@
 from django.contrib.auth.views import LogoutView
 from django.urls import path
 
+from operations import finance_views, run_views, views
 from operations import operational_views as ops
 from operations import phase25_views as foundation
-from operations import run_views, views
 
 urlpatterns = [
     path("manifest.webmanifest", foundation.manifest, name="manifest"),
@@ -65,21 +65,63 @@ urlpatterns = [
     path("deliveries/<uuid:delivery_id>/", ops.detail, name="delivery-detail"),
     path("admin/calendar/", ops.calendar, name="calendar"),
     path("admin/availability/", ops.availability, name="availability"),
+    path("admin/finance/", finance_views.finance_dashboard, name="finance-dashboard"),
+    path("admin/finance/cod/", finance_views.cod_reconciliation, name="cod-reconciliation"),
+    path("admin/finance/settlements/", finance_views.client_settlements, name="client-settlements"),
+    path(
+        "admin/finance/settlements/<uuid:settlement_id>/",
+        finance_views.settlement_detail,
+        name="settlement-detail",
+    ),
+    path("client/finance/", finance_views.client_finance, name="client-finance"),
+    path("admin/reports/", finance_views.reports_index, name="reports-index"),
+    path(
+        "admin/reports/<slug:kind>/export.csv",
+        finance_views.admin_report_export,
+        name="report-export",
+    ),
+    path("admin/reports/<slug:kind>/", finance_views.admin_report, name="admin-report"),
     path("admin/dispatch/", run_views.dispatch_board, name="dispatch"),
     path("admin/dispatch/runs/new/", run_views.create_run, name="run-create"),
     path("admin/dispatch/runs/<uuid:run_id>/", run_views.run_detail, name="run-detail"),
     path("admin/dispatch/runs/<uuid:run_id>/release/", run_views.release_run, name="run-release"),
     path("admin/dispatch/runs/<uuid:run_id>/cancel/", run_views.cancel_run, name="run-cancel"),
-    path("admin/dispatch/runs/<uuid:run_id>/stops/<uuid:stop_id>/move/<str:direction>/", run_views.reorder_stop, name="run-stop-move"),
+    path(
+        "admin/dispatch/runs/<uuid:run_id>/stops/<uuid:stop_id>/move/<str:direction>/",
+        run_views.reorder_stop,
+        name="run-stop-move",
+    ),
     path("admin/dispatch/runs/<uuid:run_id>/order/", run_views.set_run_order, name="run-order"),
-    path("admin/dispatch/runs/<uuid:run_id>/group-by-area/", run_views.group_run_areas, name="run-group-areas"),
-    path("admin/dispatch/runs/<uuid:run_id>/stops/add/", run_views.add_run_stop, name="run-stop-add"),
-    path("admin/dispatch/runs/<uuid:run_id>/stops/<uuid:stop_id>/remove/", run_views.remove_run_stop, name="run-stop-remove"),
-    path("admin/dispatch/runs/<uuid:run_id>/stops/<uuid:stop_id>/retry/<str:position>/", run_views.retry_run_stop, name="admin-run-stop-retry"),
+    path(
+        "admin/dispatch/runs/<uuid:run_id>/group-by-area/",
+        run_views.group_run_areas,
+        name="run-group-areas",
+    ),
+    path(
+        "admin/dispatch/runs/<uuid:run_id>/stops/add/", run_views.add_run_stop, name="run-stop-add"
+    ),
+    path(
+        "admin/dispatch/runs/<uuid:run_id>/stops/<uuid:stop_id>/remove/",
+        run_views.remove_run_stop,
+        name="run-stop-remove",
+    ),
+    path(
+        "admin/dispatch/runs/<uuid:run_id>/stops/<uuid:stop_id>/retry/<str:position>/",
+        run_views.retry_run_stop,
+        name="admin-run-stop-retry",
+    ),
     path("field/runs/<uuid:run_id>/", run_views.rider_run, name="field-run"),
     path("field/runs/<uuid:run_id>/start/", run_views.start_run, name="field-run-start"),
-    path("field/runs/<uuid:run_id>/stops/<uuid:stop_id>/skip/", run_views.skip_run_stop, name="field-run-stop-skip"),
-    path("field/runs/<uuid:run_id>/stops/<uuid:stop_id>/retry/<str:position>/", run_views.retry_run_stop, name="field-run-stop-retry"),
+    path(
+        "field/runs/<uuid:run_id>/stops/<uuid:stop_id>/skip/",
+        run_views.skip_run_stop,
+        name="field-run-stop-skip",
+    ),
+    path(
+        "field/runs/<uuid:run_id>/stops/<uuid:stop_id>/retry/<str:position>/",
+        run_views.retry_run_stop,
+        name="field-run-stop-retry",
+    ),
     path("field/dashboard/", ops.field_dashboard, name="field-dashboard"),
     path("<str:portal>/deliveries/", ops.queue, name="delivery-queue"),
     path("<str:portal>/finance/", ops.finance, name="finance"),

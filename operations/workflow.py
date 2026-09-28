@@ -14,12 +14,14 @@ from .booking_forms import BookingForm, CollectionForm
 from .models import (
     Assignment,
     Availability,
+    ClientSettlement,
     DailySequence,
     Delivery,
     DeliveryRun,
     DomainEvent,
     Job,
     LedgerEntry,
+    Organization,
     PricingConfiguration,
     ProofOfDelivery,
     Quote,
@@ -438,26 +440,33 @@ def transition_delivery(*, actor, delivery_id, target, expected_status, request_
 
 def cod_summary(delivery):
     totals = dict(
-        delivery.ledger.filter(kind__in=["cod_collected", "cod_reconciled"])
+        delivery.ledger.filter(kind__in=["cod_collected", "cod_reconciled", "cod_settled"])
         .values_list("kind")
         .annotate(total=Sum("amount"))
     )
     collected = totals.get("cod_collected", Decimal(0))
     reconciled = totals.get("cod_reconciled", Decimal(0))
-    state = (
-        "Not applicable"
-        if not delivery.cod_amount
-        else "Reconciled"
-        if reconciled >= delivery.cod_amount
-        else "Collected"
-        if collected >= delivery.cod_amount
-        else "Expected"
-    )
+    settled = totals.get("cod_settled", Decimal(0))
+    state = "Not applicable"
+    if delivery.cod_amount:
+        if not collected:
+            state = "Expected"
+        elif collected != delivery.cod_amount:
+            state = "Mismatch"
+        elif reconciled < collected:
+            state = "Collected"
+        elif settled < reconciled:
+            state = "Reconciled"
+        else:
+            state = "Settled to Client"
     return {
         "expected": delivery.cod_amount,
         "collected": collected,
         "reconciled": reconciled,
         "pending": collected - reconciled,
+        "pending_settlement": reconciled - settled,
+        "settled": settled,
+        "difference": delivery.cod_amount - collected,
         "state": state,
     }
 
@@ -524,6 +533,10 @@ def reconcile_cod(*, actor, delivery_id, request_key, reference, note=""):
     if summary["pending"] <= 0:
         raise ValidationError("There is no collection awaiting reconciliation.")
     collection = delivery.ledger.get(kind="cod_collected")
+    if collection.amount != delivery.cod_amount:
+        raise ValidationError(
+            "Collected COD differs from the expected amount. Resolve the discrepancy before reconciliation."
+        )
     entry = LedgerEntry.objects.create(
         delivery=delivery,
         actor=actor,
@@ -550,6 +563,82 @@ def reconcile_cod(*, actor, delivery_id, request_key, reference, note=""):
         },
     )
     return entry
+
+
+@transaction.atomic
+def settle_reconciled_cod(
+    *, actor, organization_id, reconciliation_ids, request_key, method="", external_reference="", note=""
+):
+    """Record an Admin-reported full-item COD settlement; no payment is initiated here."""
+    require_role(actor, "admin")
+    key = request_uuid(request_key)
+    existing = DomainEvent.objects.filter(request_key=key).first()
+    if existing:
+        if existing.actor_id != actor.pk or existing.kind != "cod.client_settlement_recorded":
+            raise PermissionDenied
+        return ClientSettlement.objects.get(pk=existing.payload["settlement_id"])
+    ids = list(dict.fromkeys(str(value) for value in reconciliation_ids))
+    if not ids:
+        raise ValidationError("Select at least one reconciled COD item.")
+    if len(method.strip()) > 40 or len(external_reference.strip()) > 120 or len(note.strip()) > 500:
+        raise ValidationError("Settlement details exceed the allowed length.")
+    organization = Organization.objects.select_for_update().get(pk=organization_id)
+    entries = list(
+        LedgerEntry.objects.select_for_update()
+        .filter(pk__in=ids, kind="cod_reconciled")
+        .select_related("delivery__job")
+        .order_by("pk")
+    )
+    if len(entries) != len(ids):
+        raise ValidationError("One or more selected items are not eligible for settlement.")
+    if any(entry.delivery.job.organization_id != organization.pk for entry in entries):
+        raise ValidationError("All selected COD items must belong to the same Client.")
+    if any(entry.currency != "GHS" for entry in entries):
+        raise ValidationError("Only supported GHS reconciliations can be settled.")
+    if any(hasattr(entry, "settlement_entry") for entry in entries):
+        raise ValidationError("One or more selected COD items have already been settled.")
+    total = sum((entry.amount for entry in entries), Decimal("0.00"))
+    settlement = ClientSettlement.objects.create(
+        organization=organization,
+        recorded_by=actor,
+        reference=f"DPT-SET-{timezone.localdate():%y%m%d}-{uuid.uuid4().hex[:6].upper()}",
+        amount=total,
+        currency="GHS",
+        method=method.strip(),
+        external_reference=external_reference.strip(),
+        note=note.strip(),
+    )
+    settled_entries = [
+        LedgerEntry(
+            delivery=entry.delivery,
+            actor=actor,
+            kind="cod_settled",
+            amount=entry.amount,
+            currency=entry.currency,
+            reference=external_reference.strip(),
+            note=note.strip(),
+            settlement=settlement,
+            reconciled_entry=entry,
+        )
+        for entry in entries
+    ]
+    for settled in settled_entries:
+        settled.save()
+    emit_event(
+        actor=actor,
+        kind="cod.client_settlement_recorded",
+        title=f"{settlement.reference} recorded",
+        message="Client COD settlement was recorded. This app did not initiate a transfer.",
+        recipients=[],
+        request_key=key,
+        payload={
+            "settlement_id": str(settlement.pk),
+            "organization_id": str(organization.pk),
+            "entry_ids": [str(entry.pk) for entry in settled_entries],
+            "amount": str(total),
+        },
+    )
+    return settlement
 
 
 def complete_delivery(*, actor, delivery_id, request_key, recipient_name="", photo=None, note=""):

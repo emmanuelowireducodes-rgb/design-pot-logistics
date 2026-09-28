@@ -39,7 +39,7 @@ Usernames: `demo.admin`, `demo.client`, `demo.rider`, `demo.driver`. All use the
 - `/field/dashboard/`: mobile rider/driver workspace and assigned delivery cards.
 - `/deliveries/<uuid>/`: scoped details, status history and available POD.
 - `/admin/components/`: design system reference.
-- Booking, quotes, dispatch, calendar, COD finance and development pricing are functional. Live operations and reports remain upcoming.
+- Booking, quotes, dispatch, calendar, finance/COD settlement tracking, management reports and development pricing are functional. Settlement tracking records an Admin-reported remittance; it does not move funds.
 
 ## Quality checks
 
@@ -63,4 +63,4 @@ Install `requirements.lock`, provision PostgreSQL, run migrations and collectsta
 
 No map keys, SMS, WhatsApp, email, payment or storage service is needed in Phase 1. Production PostgreSQL and hosting have not been provisioned.
 
-Read [architecture](docs/ARCHITECTURE.md), [design system](docs/DESIGN_SYSTEM.md) and [verification report](docs/VERIFICATION.md). Phase 2.5 V1 location decisions are in [the location note](docs/PHASE25_V1_LOCATION.md); Phase 3 dispatch runs are described in [the Phase 3 guide](docs/PHASE3_DISPATCH_RUNS.md), with results in [the Phase 3 verification report](docs/PHASE3_VERIFICATION.md).
+Read [architecture](docs/ARCHITECTURE.md), [design system](docs/DESIGN_SYSTEM.md) and [verification report](docs/VERIFICATION.md). Phase 2.5 V1 location decisions are in [the location note](docs/PHASE25_V1_LOCATION.md); Phase 3 dispatch runs are described in [the Phase 3 guide](docs/PHASE3_DISPATCH_RUNS.md), with results in [the Phase 3 verification report](docs/PHASE3_VERIFICATION.md). Phase 4 money definitions and reporting timestamps are in [the finance and reporting guide](docs/PHASE4_FINANCE.md).

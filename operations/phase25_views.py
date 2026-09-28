@@ -452,6 +452,7 @@ def service_worker(request):
             "phase25.css",
             "location-v1.css",
             "phase3.css",
+            "phase4.css",
             "run-order.js",
             "app.js",
             "pwa.js",
