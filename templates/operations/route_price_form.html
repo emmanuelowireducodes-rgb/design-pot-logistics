@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-heading"><div><span class="eyebrow">{{ card.organization.name|default:"GENERAL DELIVERY PRICE CARD" }}</span><h1>{{ title }}.</h1><p class="muted">Choose areas and enter the prices your team offers.</p></div></div>
+<section class="card padded"><form method="post" class="form-stack">{% csrf_token %}{{ form.non_field_errors }}{% if existing_route_url %}<div class="alert"><strong>A price already exists for this route.</strong><p>Open the existing route to edit its price.</p><a class="button secondary" href="{{ existing_route_url }}">Edit Existing Price</a></div>{% endif %}
+<div class="form-columns">{% for field in form %}{% if field.name == 'origin' or field.name == 'destination' or field.name == 'bike_price' or field.name == 'car_price' %}{% include "partials/form_field.html" %}{% endif %}{% endfor %}</div>
+{% for field in form %}{% if field.name == 'same_return' %}{% include "partials/form_field.html" %}{% endif %}{% endfor %}
+<details class="card padded"><summary>Advanced Options</summary><p class="muted">For uncommon service and timing changes.</p>{% for field in form %}{% if field.name == 'service' or field.name == 'active' or field.name == 'effective_at' or field.name == 'expires_at' or field.name == 'reason' %}{% include "partials/form_field.html" %}{% endif %}{% endfor %}</details>
+<div class="map-toolbar"><a class="button secondary" href="{{ back }}">Cancel</a><button type="submit" class="button primary">Save Route Price</button></div></form></section>
+{% endblock %}

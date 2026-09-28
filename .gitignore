@@ -1,0 +1,58 @@
+# Local environment variables and credentials
+.env*
+!.env.example
+.envrc
+secrets/
+config/secrets.*
+*.pem
+*.key
+
+# Python environments, bytecode, and tool/test caches
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+
+# Local application data and uploaded/private files
+*.sqlite3
+*.sqlite3-*
+*.db
+*.db-*
+private_media/
+media/
+uploads/
+
+# Generated logs and temporary browser/build output
+*.log
+logs/
+artifacts/
+node_modules/
+staticfiles/
+dist/
+build/
+.cache/
+tmp/
+temp/
+
+# IDE/editor and operating-system files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Keep application migrations source controlled.
+# Do not add operations/migrations/ to this ignore file.

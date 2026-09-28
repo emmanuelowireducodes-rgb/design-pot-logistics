@@ -1,0 +1,92 @@
+from django.contrib.auth.views import LogoutView
+from django.urls import path
+
+from operations import operational_views as ops
+from operations import phase25_views as foundation
+from operations import run_views, views
+
+urlpatterns = [
+    path("manifest.webmanifest", foundation.manifest, name="manifest"),
+    path("service-worker.js", foundation.service_worker, name="service-worker"),
+    path("offline/", foundation.offline, name="offline"),
+    path(
+        "client/deliveries/<uuid:delivery_id>/price-pending/",
+        foundation.price_pending,
+        name="price-pending",
+    ),
+    path("deliveries/<uuid:delivery_id>/map/", foundation.delivery_map, name="delivery-map"),
+    path("admin/zones/", foundation.zones, name="zones"),
+    path("admin/zones/new/", foundation.zone_edit, name="zone-create"),
+    path("admin/zones/<uuid:zone_id>/", foundation.zone_edit, name="zone-edit"),
+    path("admin/deliveries/<uuid:delivery_id>/zone/", foundation.assign_zone, name="assign-zone"),
+    path("admin/pricing/", foundation.pricing_home, name="pricing"),
+    path("admin/pricing/distance/", ops.pricing, name="distance-pricing"),
+    path("admin/pricing/cards/", foundation.cards, name="cards"),
+    path("admin/pricing/cards/new/", foundation.card_edit, name="card-create"),
+    path("admin/pricing/cards/<uuid:card_id>/", foundation.card_rates, name="card-rates"),
+    path("admin/pricing/cards/<uuid:card_id>/edit/", foundation.card_edit, name="card-edit"),
+    path("admin/pricing/cards/<uuid:card_id>/rates/new/", foundation.rate_edit, name="rate-create"),
+    path(
+        "admin/pricing/cards/<uuid:card_id>/routes/new/",
+        foundation.route_price_edit,
+        name="route-price-create",
+    ),
+    path(
+        "admin/pricing/cards/<uuid:card_id>/routes/<uuid:origin_id>/<uuid:destination_id>/",
+        foundation.route_price_edit,
+        name="route-price-edit",
+    ),
+    path(
+        "admin/pricing/cards/<uuid:card_id>/rates/<uuid:rate_key>/",
+        foundation.rate_edit,
+        name="rate-edit",
+    ),
+    path("admin/pricing/history/", foundation.pricing_history, name="pricing-history"),
+    path("admin/pricing/requests/", foundation.pending_quotes, name="pending-quotes"),
+    path(
+        "admin/pricing/requests/<uuid:delivery_id>/", foundation.manual_quote, name="manual-quote"
+    ),
+    path("", views.home, name="home"),
+    path("login/", views.SignInView.as_view(), name="login"),
+    path("logout/", LogoutView.as_view(), name="logout"),
+    path("client/booking/", ops.booking, name="booking"),
+    path("client/deliveries/<uuid:delivery_id>/edit/", ops.booking, name="edit-booking"),
+    path("client/quotes/<uuid:quote_id>/", ops.quote_review, name="quote-review"),
+    path("admin/deliveries/<uuid:delivery_id>/assign/", ops.assign, name="assign-delivery"),
+    path("admin/deliveries/<uuid:delivery_id>/reconcile/", ops.reconcile, name="reconcile-cod"),
+    path(
+        "deliveries/<uuid:delivery_id>/action/<str:target>/",
+        ops.status_action,
+        name="status-action",
+    ),
+    path("field/deliveries/<uuid:delivery_id>/complete/", ops.complete, name="complete-delivery"),
+    path("field/deliveries/<uuid:delivery_id>/collect/", ops.collect, name="collect-cod"),
+    path("deliveries/<uuid:delivery_id>/proof/", ops.proof_photo, name="proof-photo"),
+    path("deliveries/<uuid:delivery_id>/", ops.detail, name="delivery-detail"),
+    path("admin/calendar/", ops.calendar, name="calendar"),
+    path("admin/availability/", ops.availability, name="availability"),
+    path("admin/dispatch/", run_views.dispatch_board, name="dispatch"),
+    path("admin/dispatch/runs/new/", run_views.create_run, name="run-create"),
+    path("admin/dispatch/runs/<uuid:run_id>/", run_views.run_detail, name="run-detail"),
+    path("admin/dispatch/runs/<uuid:run_id>/release/", run_views.release_run, name="run-release"),
+    path("admin/dispatch/runs/<uuid:run_id>/cancel/", run_views.cancel_run, name="run-cancel"),
+    path("admin/dispatch/runs/<uuid:run_id>/stops/<uuid:stop_id>/move/<str:direction>/", run_views.reorder_stop, name="run-stop-move"),
+    path("admin/dispatch/runs/<uuid:run_id>/order/", run_views.set_run_order, name="run-order"),
+    path("admin/dispatch/runs/<uuid:run_id>/group-by-area/", run_views.group_run_areas, name="run-group-areas"),
+    path("admin/dispatch/runs/<uuid:run_id>/stops/add/", run_views.add_run_stop, name="run-stop-add"),
+    path("admin/dispatch/runs/<uuid:run_id>/stops/<uuid:stop_id>/remove/", run_views.remove_run_stop, name="run-stop-remove"),
+    path("admin/dispatch/runs/<uuid:run_id>/stops/<uuid:stop_id>/retry/<str:position>/", run_views.retry_run_stop, name="admin-run-stop-retry"),
+    path("field/runs/<uuid:run_id>/", run_views.rider_run, name="field-run"),
+    path("field/runs/<uuid:run_id>/start/", run_views.start_run, name="field-run-start"),
+    path("field/runs/<uuid:run_id>/stops/<uuid:stop_id>/skip/", run_views.skip_run_stop, name="field-run-stop-skip"),
+    path("field/runs/<uuid:run_id>/stops/<uuid:stop_id>/retry/<str:position>/", run_views.retry_run_stop, name="field-run-stop-retry"),
+    path("field/dashboard/", ops.field_dashboard, name="field-dashboard"),
+    path("<str:portal>/deliveries/", ops.queue, name="delivery-queue"),
+    path("<str:portal>/finance/", ops.finance, name="finance"),
+    path(
+        "notifications/<uuid:notification_id>/read/",
+        views.read_notification,
+        name="notification-read",
+    ),
+    path("<str:portal>/<str:section>/", views.page, name="workspace"),
+]

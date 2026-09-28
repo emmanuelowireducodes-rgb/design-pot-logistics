@@ -1,0 +1,23 @@
+{% load static %}<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{% block title %}{{ title|default:"Welcome" }}{% endblock %} · DESIGN-POT LOGISTICS</title>
+<meta name="theme-color" content="#152d25"><meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="manifest" href="{% url 'manifest' %}"><link rel="apple-touch-icon" href="{% static 'icon-192.png' %}">
+<link rel="stylesheet" href="{% static 'phase25.css' %}"><link rel="stylesheet" href="{% static 'location-v1.css' %}"><link rel="stylesheet" href="{% static 'phase3.css' %}"><script src="{% static 'pwa.js' %}" defer></script>
+<link rel="stylesheet" href="{% static 'app.css' %}"><link rel="stylesheet" href="{% static 'phase2.css' %}"><script src="{% static 'app.js' %}" defer></script>
+<link rel="icon" href="{% static 'favicon.svg' %}" type="image/svg+xml"></head>
+<body class="{% if field_mode %}field-mode{% endif %}">
+<div id="connection-restored" class="connection-banner" role="status" hidden>Connection restored. <a href="">Refresh this page</a> before continuing with live work.</div>
+{% if not user.is_authenticated %}<button type="button" class="button secondary" data-install hidden>Install Design-Pot</button>{% endif %}
+<a class="skip-link" href="#main">Skip to content</a>
+{% if user.is_authenticated %}
+<aside class="sidebar" id="navigation"><a class="brand" href="/"><span class="brand-mark">D<span>↗</span></span><span>DESIGN-POT<small>LOGISTICS</small></span></a>
+<div class="workspace-label">{{ portal_label }}</div>
+<nav aria-label="Main navigation">{% for item in navigation %}<a href="{{ item.url }}" class="nav-link {% if section == item.key %}active{% endif %}" {% if section == item.key %}aria-current="page"{% endif %}><span aria-hidden="true" class="nav-icon">{{ item.icon }}</span>{{ item.label }}{% if item.key == 'dashboard' %}<span class="nav-dot"></span>{% endif %}</a>{% endfor %}</nav>
+<div class="sidebar-bottom"><div class="region"><span class="online-dot"></span> Accra, Ghana <small>GMT</small></div><div class="user-card"><span class="avatar">{{ user.first_name|first|default:user.username|first }}</span><div><strong>{{ user.get_full_name|default:user.username }}</strong><small>{{ user.get_role_display }}</small></div><form method="post" action="{% url 'logout' %}">{% csrf_token %}<button class="icon-button" aria-label="Sign out" title="Sign out">↪</button></form></div></div></aside>
+<div class="workspace"><header class="topbar"><div class="breadcrumb"><button class="icon-button menu-toggle" aria-label="Open navigation" aria-expanded="false" aria-controls="navigation">☰</button><span>{{ portal_label }}</span><span class="divider">/</span><strong>{{ title }}</strong></div><div class="topbar-right"><button type="button" class="button secondary" data-install hidden>Install app</button><span class="desktop-only">Accra <span class="muted">· GMT</span></span><a class="icon-button" href="/{% if user.role == 'admin' %}admin{% elif user.role == 'client' %}client{% else %}field{% endif %}/notifications/" aria-label="Notifications">♧</a><span class="avatar small">{{ user.first_name|first|default:user.username|first }}</span></div></header>
+{% if demo_mode %}<div class="demo-banner"><span class="demo-dot"></span><strong>Sample workspace</strong><span>Development data only. No live deliveries or payments.</span></div>{% endif %}
+<main id="main" tabindex="-1">{% for message in messages %}<div class="alert {{ message.tags }}" role="status">{{ message }}</div>{% endfor %}<div class="alert offline" id="offline" role="status" hidden>You are offline. These records may be out of date. Reconnect before continuing.</div>{% block content %}{% endblock %}</main>
+<footer class="page-footer"><span>DESIGN-POT LOGISTICS</span><span>Built for the road ahead.</span></footer></div>
+{% else %}<main id="main">{% block public_content %}{% endblock %}</main>{% endif %}
+</body></html>

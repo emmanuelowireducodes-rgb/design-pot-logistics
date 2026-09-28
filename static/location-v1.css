@@ -1,0 +1,11 @@
+.location-picker{min-width:0;display:grid;align-content:start;gap:12px}
+.location-picker .help-text{margin:0;max-width:62ch}
+.location-picker .form-field{min-width:0}
+.location-picker input[type=url]{width:100%;min-width:0}
+.location-stop-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin:16px 0}
+.location-stop-grid>*{min-width:0}
+.location-address{font-size:1.1rem;font-weight:600;overflow-wrap:anywhere}
+.next-stop-card{border:2px solid #17694b}
+.nav-primary{min-height:56px;display:flex;align-items:center;justify-content:center;gap:10px;width:min(100%,540px);font-size:1.05rem;font-weight:700;margin:18px 0}
+.detail-locations{margin:16px 0}
+@media(max-width:700px){.location-stop-grid{grid-template-columns:minmax(0,1fr)}.nav-primary{width:100%;min-height:60px}.detail-locations{padding:18px}}

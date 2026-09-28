@@ -1,0 +1,6 @@
+<div class="location-picker"><h3>{{ label }}</h3>
+{% include "partials/form_field.html" with field=zone %}
+{% include "partials/form_field.html" with field=area %}
+{% include "partials/form_field.html" with field=address %}
+<div class="form-field"><label for="id_{{ prefix }}_google_maps_url">Google Maps location link <span class="muted">(optional)</span></label><p class="help-text">In Google Maps, find or pin the location, tap Share, copy the link, then paste it here. Design-Pot will not look up or change the link.</p>{{ maps_url }}</div>
+{% include "partials/form_field.html" with field=landmark %}{% include "partials/form_field.html" with field=instructions %}</div>
