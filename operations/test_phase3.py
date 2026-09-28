@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import connection
-from django.test import TestCase
+from django.test import TestCase, skipUnlessDBFeature
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
@@ -84,6 +84,39 @@ class DeliveryRunTests(TestCase):
             delivery_ids=[delivery.pk for delivery in deliveries], notes="Morning dispatch",
             request_key=uuid.uuid4(),
         )
+
+    def assert_row_lock_targets_only(self, queries, table):
+        lock_query = next(
+            (
+                query["sql"]
+                for query in queries
+                if f'FROM "operations_{table}"' in query["sql"]
+                and "FOR UPDATE" in query["sql"]
+            ),
+            None,
+        )
+        self.assertIsNotNone(lock_query)
+        self.assertIn(f'FOR UPDATE OF "operations_{table}"', lock_query)
+
+    @skipUnlessDBFeature("has_select_for_update")
+    def test_create_run_locks_deliveries_without_nullable_joined_rows(self):
+        delivery = self.confirmed()
+        with CaptureQueriesContext(connection) as queries:
+            self.draft_run([delivery])
+        self.assert_row_lock_targets_only(queries, "delivery")
+
+    @skipUnlessDBFeature("has_select_for_update")
+    def test_group_stops_locks_stops_without_nullable_joined_rows(self):
+        delivery = self.confirmed()
+        run = self.draft_run([delivery])
+        with CaptureQueriesContext(connection) as queries:
+            runs.group_stops_by_area(
+                actor=self.admin,
+                run_id=run.pk,
+                expected_version=run.version,
+                request_key=uuid.uuid4(),
+            )
+        self.assert_row_lock_targets_only(queries, "runstop")
 
     def release(self, run):
         runs.release_run(

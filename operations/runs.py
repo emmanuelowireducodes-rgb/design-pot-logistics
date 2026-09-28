@@ -117,7 +117,7 @@ def create_run(*, actor, resource_id, operational_date, delivery_ids, notes="", 
     ids = list(dict.fromkeys(str(value) for value in delivery_ids))
     if not ids:
         raise ValidationError("Select at least one confirmed delivery.")
-    locked_deliveries = list(Delivery.objects.select_for_update().select_related(
+    locked_deliveries = list(Delivery.objects.select_for_update(of=("self",)).select_related(
         "job", "pickup", "destination", "destination__zone"
     ).filter(pk__in=ids).order_by("pk"))
     if len(locked_deliveries) != len(ids):
@@ -325,7 +325,7 @@ def group_stops_by_area(*, actor, run_id, expected_version, request_key=None):
         raise ValidationError("The stop order changed in another session. Reload the run.")
     if run.status not in (DeliveryRun.Status.DRAFT, *ACTIVE_RUNS):
         raise ValidationError("This run can no longer be arranged by area.")
-    stops = list(run.stops.select_for_update().filter(status=RunStop.Status.PENDING).select_related(
+    stops = list(run.stops.select_for_update(of=("self",)).filter(status=RunStop.Status.PENDING).select_related(
         "delivery__destination__zone"
     ).order_by("sequence"))
     stops.sort(key=lambda stop: (
