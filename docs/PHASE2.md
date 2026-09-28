@@ -1,6 +1,6 @@
 # Phase 2: manually dispatched delivery workflow
 
-The Django architecture, roles, design tokens and Phase 1 tests are preserved. This release connects single-delivery booking, quote review, confirmation, manual dispatch, rider/driver progress, photo POD, COD collection/reconciliation and client tracking to the same database.
+The Django architecture, roles, design tokens and Phase 1 tests are preserved. This release connects single-delivery booking, quote review, confirmation, manual dispatch, rider/driver progress, COD collection/reconciliation and client tracking to the same database. Earlier Phase 2 planning included photo proof of delivery; current V1 does not accept Rider/Driver proof-photo uploads.
 
 V1's Phase 2.5 location decision is manual: clients choose active Design-Pot operational zones, enter written addresses and may supply Google Maps share links. No Google Maps Platform API or billing is required. See [V1 location and navigation](PHASE25_V1_LOCATION.md).
 
@@ -46,23 +46,15 @@ Confirmed quotes never change with new pricing. Editing an unconfirmed draft rep
 
 ## Database changes
 
-Migration 0003 adds draft reference support, booking idempotency keys/revisions/current quote, nullable paired coordinates, assignment windows and override reasons, block release metadata, POD policy/photo/hash, payment method/reference/note, previous status and event idempotency keys. It adds the daily reference allocator and active pricing-version selector, plus operational indexes.
+Migration 0003 adds draft reference support, booking idempotency keys/revisions/current quote, nullable paired coordinates, assignment windows and override reasons, block release metadata, legacy POD photo/hash columns, payment method/reference/note, previous status and event idempotency keys. It adds the daily reference allocator and active pricing-version selector, plus operational indexes.
 
 Migration 0004 adds ordered status sequences and calendar release reasons. Legacy event sequences are backfilled without rewriting their existing content; where Phase 1 did not record a previous state, that value remains unknown. Existing immutable-table triggers are temporarily removed and restored inside migrations because SQLite table reconstruction can otherwise discard them.
 
 New state changes lock the relevant job/delivery/resource rows on PostgreSQL and append history, events and in-app notifications in the same transaction. Duplicate actions use unique request keys; confirmed quotes and financial collections cannot be silently replaced. SQLite is development-only and does not verify PostgreSQL row-lock behavior.
 
-## Proof of delivery
+## Delivery completion
 
-Default Standard/Premium policy requires recipient name and photo. Policy is copied onto each draft and preserved at confirmation; changing defaults does not alter an existing delivery. A service can support future OTP/signature policy fields without making them available prematurely.
-
-Uploads accept JPEG/PNG only, up to 5 MiB and 16 megapixels. The upload handler stops oversized streams. Pillow decodes/verifies files, strips metadata and trailing data by re-encoding to JPEG, and downsizes to at most 1600×1600. Names are randomized; hashes and the applied policy are recorded on immutable POD records.
-
-Files live in `private_media/`, never in static assets. There is no public media route or storage URL. `/deliveries/<uuid>/proof/` authorizes the request, serves an attachment as JPEG, and sets private/no-store and nosniff. File writes are cleaned up when completion fails. A process crash between file write and database commit can leave an orphan; add retention/orphan cleanup and backups for a production host.
-
-Set `DPOT_PRIVATE_MEDIA_ROOT` to durable private storage on the deployment host. Multi-instance deployment needs shared private storage or a private object-storage adapter, not independent instance disks.
-
-The upload design follows [Django file guidance](https://docs.djangoproject.com/en/5.2/ref/models/fields/) and [Pillow security guidance](https://pillow.readthedocs.io/en/stable/handbook/security.html).
+Riders and Drivers complete deliveries without file uploads. The completion record stores recipient name, optional note, actor, timestamp, status history, and any COD collection/reconciliation. Standard and Premium snapshots retain the recipient-name policy only. Historical migration 0003 includes nullable POD photo/hash columns; those columns remain in production for schema safety but are not accepted, displayed, processed, downloaded, or written by V1. Migration 0011 removes them from Django's model state without issuing database DROP statements.
 
 ## COD and notifications
 

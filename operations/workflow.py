@@ -33,7 +33,6 @@ from .models import (
 )
 from .pricing import prepare_quote, version_for
 from .services import emit_event
-from .uploads import sanitize_photo
 
 ACTIVE = ("assigned", "to_pickup", "picked_up", "in_transit")
 EXCEPTIONS = ("unreachable", "failed")
@@ -47,6 +46,8 @@ ACTION_LABELS = {
 
 def require_role(actor, *roles):
     if not actor.is_active or actor.role not in roles:
+        raise PermissionDenied
+    if actor.role in (User.Role.RIDER, User.Role.DRIVER) and not actor.operational_access_approved:
         raise PermissionDenied
 
 
@@ -641,71 +642,51 @@ def settle_reconciled_cod(
     return settlement
 
 
-def complete_delivery(*, actor, delivery_id, request_key, recipient_name="", photo=None, note=""):
-    # Validate access before spending CPU on uploaded image processing.
+def complete_delivery(*, actor, delivery_id, request_key, recipient_name="", note=""):
     candidate = Delivery.objects.get(pk=delivery_id)
     require_assignee(actor, candidate)
     if replay(actor, candidate, request_key, "delivery.completed"):
         return ProofOfDelivery.objects.get(delivery=candidate)
-    clean_photo = sanitize_photo(photo) if photo else None
-    stored_name = None
-    stored_storage = None
-    try:
-        with transaction.atomic():
-            delivery = (
-                Delivery.objects.select_for_update().select_related("job").get(pk=delivery_id)
-            )
-            require_assignee(actor, delivery)
-            if replay(actor, delivery, request_key, "delivery.completed"):
-                return ProofOfDelivery.objects.get(delivery=delivery)
-            if delivery.status != "in_transit":
-                raise ValidationError("Start the delivery before recording completion.")
-            policy = delivery.pod_policy or settings.POD_POLICIES[delivery.service]
-            if policy.get("recipient_name") and not recipient_name.strip():
-                raise ValidationError("Enter the name of the person who received the package.")
-            if policy.get("photo") and not clean_photo:
-                raise ValidationError("A delivery photo is required.")
-            if len(recipient_name) > 120 or len(note) > 500:
-                raise ValidationError("The recipient name or note is too long.")
-            if delivery.cod_amount and cod_summary(delivery)["collected"] != delivery.cod_amount:
-                raise ValidationError(
-                    "Record the expected COD collection before completing delivery."
-                )
-            proof = ProofOfDelivery(
-                delivery=delivery,
-                actor=actor,
-                recipient_name=recipient_name.strip(),
-                note=note.strip(),
-                policy_snapshot=policy,
-            )
-            if clean_photo:
-                image, digest = clean_photo
-                proof.photo.save(image.name, image, save=False)
-                stored_name, stored_storage = proof.photo.name, proof.photo.storage
-                proof.photo_sha256 = digest
-            proof.save()
-            record_status(delivery, actor, "delivered", "Proof of delivery recorded.")
-            Availability.objects.filter(
-                delivery=delivery, kind="booking", cancelled_at__isnull=True
-            ).update(cancelled_at=timezone.now(), release_reason="completed")
-            emit_event(
-                actor=actor,
-                kind="delivery.completed",
-                delivery=delivery,
-                title=f"{delivery.reference} delivered",
-                message="Delivery completed. Proof of delivery is available.",
-                recipients=audiences(delivery),
-                request_key=request_uuid(request_key),
-                payload={"proof_id": str(proof.pk)},
-            )
-            from .runs import complete_stop
+    with transaction.atomic():
+        delivery = Delivery.objects.select_for_update().select_related("job").get(pk=delivery_id)
+        require_assignee(actor, delivery)
+        if replay(actor, delivery, request_key, "delivery.completed"):
+            return ProofOfDelivery.objects.get(delivery=delivery)
+        if delivery.status != "in_transit":
+            raise ValidationError("Start the delivery before recording completion.")
+        policy = delivery.pod_policy or settings.POD_POLICIES[delivery.service]
+        if policy.get("recipient_name") and not recipient_name.strip():
+            raise ValidationError("Enter the name of the person who received the package.")
+        if len(recipient_name) > 120 or len(note) > 500:
+            raise ValidationError("The recipient name or note is too long.")
+        if delivery.cod_amount and cod_summary(delivery)["collected"] != delivery.cod_amount:
+            raise ValidationError("Record the expected COD collection before completing delivery.")
+        proof = ProofOfDelivery(
+            delivery=delivery,
+            actor=actor,
+            recipient_name=recipient_name.strip(),
+            note=note.strip(),
+            policy_snapshot={"recipient_name": bool(policy.get("recipient_name"))},
+        )
+        proof.save()
+        record_status(delivery, actor, "delivered", "Delivery completed.")
+        Availability.objects.filter(
+            delivery=delivery, kind="booking", cancelled_at__isnull=True
+        ).update(cancelled_at=timezone.now(), release_reason="completed")
+        emit_event(
+            actor=actor,
+            kind="delivery.completed",
+            delivery=delivery,
+            title=f"{delivery.reference} delivered",
+            message="Delivery completed. Recipient and operational details are recorded.",
+            recipients=audiences(delivery),
+            request_key=request_uuid(request_key),
+            payload={"proof_id": str(proof.pk)},
+        )
+        from .runs import complete_stop
 
-            complete_stop(actor=actor, delivery=delivery)
-            return proof
-    except Exception:
-        if stored_name and stored_storage:
-            stored_storage.delete(stored_name)
-        raise
+        complete_stop(actor=actor, delivery=delivery)
+        return proof
 
 
 @transaction.atomic

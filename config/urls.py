@@ -1,7 +1,7 @@
 from django.contrib.auth.views import LogoutView
-from django.urls import path
+from django.urls import include, path
 
-from operations import finance_views, push, run_views, views
+from operations import finance_views, push, run_views, user_management, views
 from operations import operational_views as ops
 from operations import phase25_views as foundation
 
@@ -19,6 +19,10 @@ urlpatterns = [
     ),
     path("deliveries/<uuid:delivery_id>/map/", foundation.delivery_map, name="delivery-map"),
     path("admin/zones/", foundation.zones, name="zones"),
+    path("admin/users/", user_management.user_list, name="user-management"),
+    path("admin/users/<int:user_id>/password/", user_management.reset_user_password, name="user-password-reset"),
+    path("admin/users/<int:user_id>/status/", user_management.toggle_user_status, name="user-status-toggle"),
+    path("admin/password/", user_management.change_own_password, name="admin-password-change"),
     path("admin/zones/new/", foundation.zone_edit, name="zone-create"),
     path("admin/zones/<uuid:zone_id>/", foundation.zone_edit, name="zone-edit"),
     path("admin/deliveries/<uuid:delivery_id>/zone/", foundation.assign_zone, name="assign-zone"),
@@ -51,6 +55,9 @@ urlpatterns = [
     ),
     path("", views.home, name="home"),
     path("login/", views.SignInView.as_view(), name="login"),
+    path("accounts/", include("allauth.urls")),
+    path("field/pending/", views.field_pending, name="field-pending"),
+    path("admin/fleet/approve/<int:user_id>/", views.approve_field_account, name="approve-field-account"),
     path("logout/", LogoutView.as_view(), name="logout"),
     path("client/booking/", ops.booking, name="booking"),
     path("client/deliveries/<uuid:delivery_id>/edit/", ops.booking, name="edit-booking"),
@@ -64,7 +71,6 @@ urlpatterns = [
     ),
     path("field/deliveries/<uuid:delivery_id>/complete/", ops.complete, name="complete-delivery"),
     path("field/deliveries/<uuid:delivery_id>/collect/", ops.collect, name="collect-cod"),
-    path("deliveries/<uuid:delivery_id>/proof/", ops.proof_photo, name="proof-photo"),
     path("deliveries/<uuid:delivery_id>/", ops.detail, name="delivery-detail"),
     path("admin/calendar/", ops.calendar, name="calendar"),
     path("admin/availability/", ops.availability, name="availability"),

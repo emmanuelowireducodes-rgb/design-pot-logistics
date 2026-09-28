@@ -427,15 +427,11 @@ def manifest(request):
             "scope": "/",
             "display": "standalone",
             "background_color": "#f5f5f7",
-            "theme_color": "#152d25",
+            "theme_color": "#00634b",
             "icons": [
-                {
-                    "src": static(f"icon-{size}.png"),
-                    "sizes": f"{size}x{size}",
-                    "type": "image/png",
-                    "purpose": "any maskable",
-                }
-                for size in (192, 512)
+                {"src": static("icon-192.png"), "sizes": "192x192", "type": "image/png", "purpose": "any"},
+                {"src": static("icon-512.png"), "sizes": "512x512", "type": "image/png", "purpose": "any"},
+                {"src": static("icon-maskable-512.png"), "sizes": "512x512", "type": "image/png", "purpose": "maskable"},
             ],
         },
         content_type="application/manifest+json",
@@ -456,9 +452,12 @@ def service_worker(request):
             "run-order.js",
             "app.js",
             "pwa.js",
-            "favicon.svg",
             "icon-192.png",
             "icon-512.png",
+            "icon-maskable-512.png",
+            "apple-touch-icon.png",
+            "favicon.png",
+            "design-pot-logo.png",
         )
     ]
     code = (

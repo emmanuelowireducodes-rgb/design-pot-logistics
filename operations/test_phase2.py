@@ -1,9 +1,6 @@
-import io
-import tempfile
 import uuid
 from datetime import timedelta
 from decimal import Decimal
-from pathlib import Path
 from unittest.mock import patch
 
 from django.core.exceptions import PermissionDenied, ValidationError
@@ -13,7 +10,6 @@ from django.test import Client, TestCase, override_settings
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils import timezone
-from PIL import Image
 
 from . import workflow
 from .booking_forms import BookingForm
@@ -33,13 +29,6 @@ from .models import (
     StatusEvent,
     User,
 )
-from .uploads import sanitize_photo
-
-
-def image_upload():
-    data = io.BytesIO()
-    Image.new("RGB", (30, 30), "green").save(data, "PNG")
-    return SimpleUploadedFile("package.png", data.getvalue(), content_type="image/png")
 
 
 class Phase2Tests(TestCase):
@@ -97,11 +86,6 @@ class Phase2Tests(TestCase):
         )
         road_distance.start()
         self.addCleanup(road_distance.stop)
-        self.private_dir = tempfile.TemporaryDirectory()
-        self.addCleanup(self.private_dir.cleanup)
-        self.settings_override = override_settings(PRIVATE_MEDIA_ROOT=self.private_dir.name)
-        self.settings_override.enable()
-        self.addCleanup(self.settings_override.disable)
 
     def booking_data(self, **overrides):
         data = {
@@ -412,81 +396,23 @@ class Phase2Tests(TestCase):
         delivery.refresh_from_db()
         self.assertEqual(delivery.status, "in_transit")
 
-    def test_pod_policy_requires_name_photo_and_cod(self):
-        delivery = self.underway()
-        for kwargs in [
-            {},
-            {"recipient_name": "Ama"},
-            {"recipient_name": "Ama", "photo": image_upload()},
-        ]:
-            with self.subTest(fields=kwargs.keys()), self.assertRaises(ValidationError):
-                workflow.complete_delivery(
-                    actor=self.rider, delivery_id=delivery.pk, request_key=uuid.uuid4(), **kwargs
-                )
-        self.assertFalse(ProofOfDelivery.objects.exists())
-        self.assertFalse(list(Path(self.private_dir.name).rglob("*.jpg")))
-
-    def test_pod_photo_is_validated_sanitized_and_access_protected(self):
+    def test_pod_requires_recipient_name_but_no_photo(self):
         delivery = self.underway(payment_method="paid")
-        key = uuid.uuid4()
+        with self.assertRaises(ValidationError):
+            workflow.complete_delivery(
+                actor=self.rider, delivery_id=delivery.pk,
+                request_key=uuid.uuid4(), recipient_name="",
+            )
         proof = workflow.complete_delivery(
-            actor=self.rider,
-            delivery_id=delivery.pk,
-            request_key=key,
-            recipient_name="Ama",
-            photo=image_upload(),
+            actor=self.rider, delivery_id=delivery.pk,
+            request_key=uuid.uuid4(), recipient_name="Ama", note="Left at reception",
         )
-        same = workflow.complete_delivery(
-            actor=self.rider, delivery_id=delivery.pk, request_key=key, recipient_name="Ama"
-        )
-        self.assertEqual(proof.pk, same.pk)
-        self.assertEqual(len(proof.photo_sha256), 64)
-        with proof.photo.open("rb") as data:
-            self.assertEqual(Image.open(data).format, "JPEG")
-        url = reverse("proof-photo", args=[delivery.pk])
-        self.client.force_login(self.other_customer)
-        self.assertEqual(self.client.get(url).status_code, 404)
-        self.client.force_login(self.other_rider)
-        self.assertEqual(self.client.get(url).status_code, 404)
-        self.client.force_login(self.customer)
-        response = self.client.get(url)
-        self.assertEqual(response.status_code, 200)
-        self.assertIn("attachment", response["Content-Disposition"])
-        self.assertEqual(response["Cache-Control"], "private, no-store")
-        response.close()
-        self.assertEqual(self.client.get("/private_media/" + proof.photo.name).status_code, 404)
-
-    def test_invalid_photo_types_bytes_size_and_pixel_limit(self):
-        for upload in [
-            SimpleUploadedFile("fake.png", b"not a photo", content_type="image/png"),
-            SimpleUploadedFile("vector.svg", b"<svg/>", content_type="image/svg+xml"),
-            SimpleUploadedFile("huge.jpg", b"x" * (5 * 1024 * 1024 + 1), content_type="image/jpeg"),
-        ]:
-            with self.subTest(name=upload.name), self.assertRaises(ValidationError):
-                sanitize_photo(upload)
-        source = image_upload()
-        with patch("operations.uploads.Image.open") as opened:
-            opened.return_value.__enter__.return_value.format = "PNG"
-            opened.return_value.__enter__.return_value.width = 5000
-            opened.return_value.__enter__.return_value.height = 5000
-            with self.assertRaises(ValidationError):
-                sanitize_photo(source)
-
-    def test_pod_failure_cleans_file_and_rolls_back_completion(self):
-        delivery = self.underway(payment_method="paid")
-        with patch("operations.workflow.emit_event", side_effect=RuntimeError("simulated failure")):
-            with self.assertRaises(RuntimeError):
-                workflow.complete_delivery(
-                    actor=self.rider,
-                    delivery_id=delivery.pk,
-                    request_key=uuid.uuid4(),
-                    recipient_name="Ama",
-                    photo=image_upload(),
-                )
         delivery.refresh_from_db()
-        self.assertEqual(delivery.status, "in_transit")
-        self.assertFalse(ProofOfDelivery.objects.exists())
-        self.assertFalse(list(Path(self.private_dir.name).rglob("*.jpg")))
+        self.assertEqual(delivery.status, "delivered")
+        self.assertEqual(proof.recipient_name, "Ama")
+        self.assertEqual(proof.note, "Left at reception")
+        self.assertEqual(proof.policy_snapshot, {"recipient_name": True})
+        self.assertEqual(delivery.history.order_by("-created_at").first().status, "delivered")
 
     def test_cod_exact_collection_reconcile_idempotency_and_roles(self):
         delivery = self.underway()
@@ -623,7 +549,6 @@ class Phase2Tests(TestCase):
             {
                 "request_key": uuid.uuid4(),
                 "recipient_name": "Ama Test",
-                "photo": image_upload(),
                 "note": "Received at front door",
             },
         )
@@ -641,7 +566,7 @@ class Phase2Tests(TestCase):
         page = self.client.get(reverse("delivery-detail", args=[delivery.pk]))
         self.assertContains(page, "Delivered")
         self.assertContains(page, "Received at front door")
-        self.assertContains(page, "Download delivery photo")
+        self.assertNotContains(page, "Download delivery photo")
         self.assertContains(page, "Reconciled")
         self.assertEqual(
             list(delivery.history.order_by("created_at").values_list("status", flat=True)),
@@ -656,24 +581,18 @@ class Phase2Tests(TestCase):
             ],
         )
 
-    def test_oversized_multipart_upload_cannot_complete_delivery(self):
+    def test_legacy_image_upload_and_download_route_are_unavailable(self):
         delivery = self.underway(payment_method="paid")
         self.client.force_login(self.rider)
         response = self.client.post(
             reverse("complete-delivery", args=[delivery.pk]),
-            {
-                "request_key": uuid.uuid4(),
-                "recipient_name": "Ama",
-                "photo": SimpleUploadedFile(
-                    "large.jpg", b"x" * (5 * 1024 * 1024 + 1), content_type="image/jpeg"
-                ),
-            },
+            {"request_key": uuid.uuid4(), "recipient_name": "Ama", "photo": SimpleUploadedFile("legacy.jpg", b"old upload", content_type="image/jpeg")},
         )
-        self.assertContains(response, "Choose a photo smaller than 5 MB.")
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(self.client.get(f"/deliveries/{delivery.pk}/proof/").status_code, 404)
         delivery.refresh_from_db()
         self.assertEqual(delivery.status, "in_transit")
         self.assertFalse(ProofOfDelivery.objects.exists())
-        self.assertFalse(list(Path(self.private_dir.name).rglob("*.jpg")))
 
     def test_status_sequence_resolves_equal_timestamps_and_exception_resume(self):
         instant = timezone.now()
@@ -716,10 +635,8 @@ class Phase2Tests(TestCase):
             delivery_id=delivery.pk,
             request_key=uuid.uuid4(),
             recipient_name="Ama",
-            photo=image_upload(),
         )
-        with self.assertRaises(ValueError):
-            _ = proof.photo.url
+        self.assertEqual(proof.policy_snapshot, {"recipient_name": True})
         block.refresh_from_db()
         self.assertEqual(block.release_reason, "completed")
         self.assertIsNotNone(block.cancelled_at)
@@ -782,7 +699,6 @@ class Phase2Tests(TestCase):
             delivery_id=delivery.pk,
             request_key=uuid.uuid4(),
             recipient_name="Ama",
-            photo=image_upload(),
         )
         delivery.refresh_from_db()
         self.assertEqual(delivery.status, "delivered")

@@ -5,7 +5,7 @@ from django.db import migrations, models
 from importlib import import_module
 
 
-history = import_module("operations.migrations.0002_immutable_history")
+history = import_module("operations.migrations.0005_phase25_foundations")
 
 
 class Migration(migrations.Migration):
@@ -15,11 +15,11 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.RunPython(history.uninstall, history.install),
+        migrations.RunPython(history.uninstall_history, history.install_history),
         migrations.AddField(
             model_name='location',
             name='google_maps_url',
             field=models.CharField(blank=True, max_length=2048, validators=[operations.validators.validate_google_maps_link]),
         ),
-        migrations.RunPython(history.install, history.uninstall),
+        migrations.RunPython(history.install_history, history.uninstall_history),
     ]

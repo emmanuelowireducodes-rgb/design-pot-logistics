@@ -1,17 +1,14 @@
 # mypy: disable-error-code="attr-defined"
-import tempfile
 import uuid
 from datetime import timedelta
 from decimal import Decimal
 from unittest.mock import patch
 
 from django.core.exceptions import PermissionDenied, ValidationError
-from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import connection
-from django.test import TestCase, override_settings
+from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
-from PIL import Image
 
 from . import runs, workflow
 from .models import (
@@ -26,14 +23,6 @@ from .models import (
     RunStop,
     User,
 )
-
-
-def pod_photo():
-    import io
-
-    contents = io.BytesIO()
-    Image.new("RGB", (32, 32), "green").save(contents, "PNG")
-    return SimpleUploadedFile("proof.png", contents.getvalue(), content_type="image/png")
 
 
 class DeliveryRunTests(TestCase):
@@ -62,11 +51,6 @@ class DeliveryRunTests(TestCase):
         distance = patch("operations.maps.RoadDistance.road_kilometres", return_value=Decimal("5"))
         distance.start()
         self.addCleanup(distance.stop)
-        self.media_dir = tempfile.TemporaryDirectory()
-        self.addCleanup(self.media_dir.cleanup)
-        self.settings_override = override_settings(PRIVATE_MEDIA_ROOT=self.media_dir.name)
-        self.settings_override.enable()
-        self.addCleanup(self.settings_override.disable)
 
     def confirmed(self, *, area="Osu", service="standard", vehicle="bike", destination_zone=None, payment="paid"):
         key = uuid.uuid4()
@@ -230,9 +214,7 @@ class DeliveryRunTests(TestCase):
         for before, after in [("assigned", "to_pickup"), ("to_pickup", "picked_up"), ("picked_up", "in_transit")]:
             workflow.transition_delivery(actor=self.rider, delivery_id=delivery.pk, target=after,
                 expected_status=before, request_key=uuid.uuid4())
-        with self.assertRaises(ValidationError):
-            workflow.complete_delivery(actor=self.rider, delivery_id=delivery.pk, request_key=uuid.uuid4(), recipient_name="Ama")
-        workflow.complete_delivery(actor=self.rider, delivery_id=delivery.pk, request_key=uuid.uuid4(), recipient_name="Ama", photo=pod_photo())
+        workflow.complete_delivery(actor=self.rider, delivery_id=delivery.pk, request_key=uuid.uuid4(), recipient_name="Ama")
         run.refresh_from_db()
         self.assertEqual(run.status, DeliveryRun.Status.COMPLETED)
         self.assertEqual(run.stops.get().status, RunStop.Status.COMPLETED)
@@ -249,7 +231,7 @@ class DeliveryRunTests(TestCase):
             workflow.transition_delivery(actor=self.rider, delivery_id=delivery.pk, target=after,
                 expected_status=before, request_key=uuid.uuid4())
         with self.assertRaises(ValidationError):
-            workflow.complete_delivery(actor=self.rider, delivery_id=delivery.pk, request_key=uuid.uuid4(), recipient_name="Ama", photo=pod_photo())
+            workflow.complete_delivery(actor=self.rider, delivery_id=delivery.pk, request_key=uuid.uuid4(), recipient_name="Ama")
         stop = run.stops.get()
         with self.assertRaises(ValidationError):
             runs.remove_stop(actor=self.admin, run_id=run.pk, stop_id=stop.pk,

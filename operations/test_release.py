@@ -225,13 +225,9 @@ class V1ReleaseTests(TestCase):
         self.assertEqual(len(public_value), 87)
 
     def test_client_booking_to_cod_settlement_end_to_end(self):
-        import io
-        import tempfile
         from decimal import Decimal
 
-        from django.core.files.uploadedfile import SimpleUploadedFile
         from django.utils import timezone
-        from PIL import Image
 
         from .workflow import (
             collect_cod,
@@ -317,18 +313,12 @@ class V1ReleaseTests(TestCase):
             amount="45.00",
             method="cash",
         )
-        image = io.BytesIO()
-        Image.new("RGB", (32, 32), "green").save(image, "PNG")
-        with tempfile.TemporaryDirectory() as media_root, override_settings(
-            PRIVATE_MEDIA_ROOT=media_root
-        ):
-            complete_delivery(
-                actor=self.rider,
-                delivery_id=delivery.pk,
-                request_key=uuid.uuid4(),
-                recipient_name="Ama Recipient",
-                photo=SimpleUploadedFile("proof.png", image.getvalue(), content_type="image/png"),
-            )
+        complete_delivery(
+            actor=self.rider,
+            delivery_id=delivery.pk,
+            request_key=uuid.uuid4(),
+            recipient_name="Ama Recipient",
+        )
         reconciliation = reconcile_cod(
             actor=self.admin,
             delivery_id=delivery.pk,

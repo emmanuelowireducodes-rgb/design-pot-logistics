@@ -28,7 +28,7 @@ The calendar is a paginated day view grouped by person and associated vehicle, w
 
 ## Database/schema changes
 
-Migration 0003 adds nullable paired manual coordinates; draft references; booking UUID/revision/current quote; POD policy snapshot; assignment windows/override reasons; availability release metadata; POD photo/hash/policy; ledger method/reference/note; previous status; domain-event idempotency keys; daily reference allocation; active pricing configuration; operational indexes.
+Migration 0003 adds nullable paired manual coordinates; draft references; booking UUID/revision/current quote; POD policy snapshot; assignment windows/override reasons; availability release metadata; legacy POD photo/hash/policy; ledger method/reference/note; previous status; domain-event idempotency keys; daily reference allocation; active pricing configuration; operational indexes.
 
 Migration 0004 adds ordered status sequences with backfill/index/uniqueness, plus calendar release reasons. Historical update/delete triggers are restored during migration. Both local databases are at 0004. PostgreSQL locking behavior has not been validated on a live service.
 
@@ -48,7 +48,7 @@ Migration 0004 adds ordered status sequences with backfill/index/uniqueness, plu
 | `/field/deliveries/<id>/complete/` | POD and completion |
 | `/field/deliveries/<id>/collect/` | COD collection |
 | `/admin/deliveries/<id>/reconcile/` | Admin COD reconciliation |
-| `/deliveries/<id>/proof/` | Authorized private photo download |
+| `/deliveries/<id>/proof/` | Removed; historical photo downloads return 404 |
 | `/admin/calendar/`, `/admin/availability/` | Scheduling |
 | `/admin/finance/`, `/client/finance/` | Scoped COD overview |
 | `/admin/pricing/` | Development pricing configuration |
@@ -59,7 +59,7 @@ Default unapproved DEVELOPMENT rates are GHS20 bike base/minimum, GHS40 car base
 
 ## POD, COD and notifications
 
-POD policies are snapshotted per delivery; defaults require recipient name and photo. Uploads accept decoded JPEG/PNG only, at most 5 MiB and 16 megapixels. Streaming limits reject oversized uploads. Re-encoding strips metadata/trailing content and limits dimensions to 1600 pixels. Random filenames, SHA-256 hashes and immutable proof records are used. Files are private, have no public storage URL, and download only through authorization with attachment/private-no-store/nosniff headers. Failed completion cleans up its newly written file. OTP/signature remain future extensions.
+Delivery completion retains recipient, note, completion time, COD, and immutable history. No new POD image upload or download is supported. The historical photo/hash columns remain in the production schema for migration safety and are absent from current Django state. Legacy image submissions are rejected.
 
 COD remains separate from delivery charges. The current assignee records the exact expected product value during In transit, using cash or mobile money (reference required for mobile money). Completion requires applicable COD collection. Admin reconciliation records an immutable transaction linked in audit to the source collection. Expected, Collected and Reconciled states are implemented; settlement, partial collections and reversals are not.
 

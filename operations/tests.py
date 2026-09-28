@@ -116,6 +116,8 @@ class FoundationTests(TestCase):
         )
 
     def test_all_role_boundaries(self):
+        self.assertFalse(self.admin.is_staff)
+        self.assertFalse(self.admin.is_superuser)
         for user, own in [
             (self.admin, "admin"),
             (self.client_user, "client"),
@@ -126,6 +128,26 @@ class FoundationTests(TestCase):
             for portal in ("admin", "client", "field"):
                 response = self.client.get(f"/{portal}/dashboard/")
                 self.assertEqual(response.status_code, 200 if portal == own else 403)
+
+        for role in (User.Role.RIDER, User.Role.DRIVER):
+            pending = User.objects.create_user(
+                f"pending-{role}-admin-boundary",
+                role=role,
+                operational_access_approved=False,
+            )
+            self.client.force_login(pending)
+            self.assertEqual(self.client.get("/admin/dashboard/").status_code, 403)
+
+    def test_inactive_admin_session_cannot_access_admin_dashboard(self):
+        inactive_admin = User.objects.create_user(
+            "inactive-admin-boundary", role=User.Role.ADMIN, is_active=False
+        )
+        self.client.force_login(inactive_admin)
+        self.assertRedirects(
+            self.client.get("/admin/dashboard/"),
+            "/login/?next=/admin/dashboard/",
+            fetch_redirect_response=False,
+        )
 
     def test_client_cannot_read_other_organization(self):
         self.client.force_login(self.other_client)
@@ -345,7 +367,13 @@ class FoundationTests(TestCase):
         self.client.force_login(self.admin)
         response = self.client.get("/admin/dashboard/")
         self.assertEqual(response["Cache-Control"], "private, no-store")
-        self.assertIn("frame-ancestors 'none'", response["Content-Security-Policy"])
+        csp = response["Content-Security-Policy"]
+        self.assertIn("frame-ancestors 'none'", csp)
+        self.assertIn("form-action 'self'", csp)
+        self.assertNotIn("https://accounts.google.com", csp)
+        self.assertIn("default-src 'self'", csp)
+        self.assertIn("script-src 'self'", csp)
+        self.assertNotIn("form-action *", csp)
 
     @override_settings(DEBUG=False)
     def test_error_pages(self):

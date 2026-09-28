@@ -4,8 +4,12 @@ from pathlib import Path
 
 from django.core.exceptions import ImproperlyConfigured
 
+from config.environment import load_local_environment
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 PRODUCTION = os.getenv("DPOT_ENV", "development") == "production"
+load_local_environment(BASE_DIR / ".env", production=PRODUCTION)
+
 DEBUG = not PRODUCTION
 DEMO_MODE = os.getenv("DPOT_DEMO", "0") == "1"
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "local-development-only-not-for-production")
@@ -19,6 +23,10 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    "allauth",
+    "allauth.account",
+    "allauth.socialaccount",
+    "allauth.socialaccount.providers.google",
     "operations",
 ]
 MIDDLEWARE = [
@@ -28,6 +36,7 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "allauth.account.middleware.AccountMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "operations.middleware.SecurityHeadersMiddleware",
@@ -71,6 +80,38 @@ else:
         }
     }
 AUTH_USER_MODEL = "operations.User"
+AUTHENTICATION_BACKENDS = [
+    "django.contrib.auth.backends.ModelBackend",
+    "allauth.account.auth_backends.AuthenticationBackend",
+]
+ACCOUNT_LOGIN_METHODS = {"username", "email"}
+ACCOUNT_SIGNUP_FIELDS = ["email*"]
+ACCOUNT_ADAPTER = "operations.social_auth.DisabledPasswordSignupAdapter"
+SOCIALACCOUNT_ADAPTER = "operations.social_auth.DesignPotSocialAccountAdapter"
+SOCIALACCOUNT_FORMS = {"signup": "operations.social_forms.DesignPotSocialSignupForm"}
+SOCIALACCOUNT_AUTO_SIGNUP = False
+SOCIALACCOUNT_LOGIN_ON_GET = False
+SOCIALACCOUNT_EMAIL_AUTHENTICATION = False
+SOCIALACCOUNT_EMAIL_AUTHENTICATION_AUTO_CONNECT = False
+SOCIALACCOUNT_EMAIL_VERIFICATION = "mandatory"
+SOCIALACCOUNT_STORE_TOKENS = False
+SOCIALACCOUNT_PROVIDERS = {
+    "google": {
+        "OAUTH_PKCE_ENABLED": True,
+        "SCOPE": ["profile", "email"],
+        **(
+            {
+                "APPS": [{
+                    "client_id": os.getenv("GOOGLE_OAUTH_CLIENT_ID", ""),
+                    "secret": os.getenv("GOOGLE_OAUTH_CLIENT_SECRET", ""),
+                    "key": "",
+                }]
+            }
+            if os.getenv("GOOGLE_OAUTH_CLIENT_ID") and os.getenv("GOOGLE_OAUTH_CLIENT_SECRET")
+            else {}
+        ),
+    }
+}
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
     {
@@ -125,19 +166,9 @@ CACHES = {
 if "test" in sys.argv:
     CACHES = {"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}}
 
-PRIVATE_MEDIA_ROOT = Path(os.getenv("DPOT_PRIVATE_MEDIA_ROOT", str(BASE_DIR / "private_media")))
-POD_MAX_UPLOAD_BYTES = 5 * 1024 * 1024
-FILE_UPLOAD_MAX_MEMORY_SIZE = 1024 * 1024
-FILE_UPLOAD_HANDLERS = [
-    "operations.uploads.BoundedImageUploadHandler",
-    "django.core.files.uploadhandler.MemoryFileUploadHandler",
-    "django.core.files.uploadhandler.TemporaryFileUploadHandler",
-]
-DATA_UPLOAD_MAX_MEMORY_SIZE = 6 * 1024 * 1024
-DATA_UPLOAD_MAX_NUMBER_FILES = 1
 POD_POLICIES = {
-    "standard": {"recipient_name": True, "photo": True},
-    "premium": {"recipient_name": True, "photo": True},
+    "standard": {"recipient_name": True},
+    "premium": {"recipient_name": True},
 }
 # Development prices are opt-in in production and never described as approved rates.
 ALLOW_DEVELOPMENT_PRICING = not PRODUCTION or os.getenv("DPOT_ALLOW_DEVELOPMENT_PRICING") == "1"

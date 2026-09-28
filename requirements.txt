@@ -1,6 +1,7 @@
 Django>=5.2,<5.3
+django-allauth[socialaccount]==65.19.4
 psycopg[binary]>=3.2,<4
+python-dotenv>=1.2.3,<2
 whitenoise>=6.9,<7
 
-Pillow>=12.3,<13
 pywebpush>=2.5,<3

@@ -7,7 +7,6 @@ from django.db import models
 from django.db.models import Q
 from django.utils import timezone
 
-from .uploads import private_storage, proof_path
 from .validators import validate_google_maps_link
 
 
@@ -29,6 +28,7 @@ class User(AbstractUser):
     role = models.CharField(max_length=12, choices=Role.choices, default=Role.CLIENT)
     organization = models.ForeignKey(Organization, null=True, blank=True, on_delete=models.PROTECT)
     phone = models.CharField(max_length=24, blank=True)
+    operational_access_approved = models.BooleanField(default=True)
 
 
 class Record(models.Model):
@@ -387,8 +387,6 @@ class ProofOfDelivery(AppendOnly):
     actor = models.ForeignKey(User, on_delete=models.PROTECT)
     recipient_name = models.CharField(max_length=120)
     note = models.CharField(max_length=500, blank=True)
-    photo = models.FileField(storage=private_storage, upload_to=proof_path, blank=True)
-    photo_sha256 = models.CharField(max_length=64, blank=True)
     policy_snapshot = models.JSONField(default=dict)
 
 

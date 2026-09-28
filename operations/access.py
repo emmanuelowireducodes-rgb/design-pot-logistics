@@ -14,6 +14,8 @@ def roles_required(*roles):
         def wrapped(request, *args, **kwargs):
             if request.user.role not in roles:
                 raise PermissionDenied
+            if request.user.role in (User.Role.RIDER, User.Role.DRIVER) and not request.user.operational_access_approved:
+                raise PermissionDenied
             return view(request, *args, **kwargs)
 
         return wrapped

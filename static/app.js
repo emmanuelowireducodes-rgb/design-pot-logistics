@@ -41,8 +41,12 @@ window.addEventListener('online', updateConnection);
 window.addEventListener('offline', updateConnection);
 updateConnection();
 document.querySelectorAll('form').forEach(form => {
-  form.addEventListener('submit', () => {
-    if (!form.checkValidity()) return;
+  form.addEventListener('submit', event => {
+    const confirmation = form.dataset.confirm;
+    if (confirmation && !window.confirm(confirmation)) event.preventDefault();
+  });
+  form.addEventListener('submit', event => {
+    if (event.defaultPrevented || !form.checkValidity()) return;
     const button = form.querySelector('button[type="submit"], button:not([type])');
     if (button) { button.setAttribute('aria-busy', 'true'); button.textContent = 'Please wait…'; }
   });

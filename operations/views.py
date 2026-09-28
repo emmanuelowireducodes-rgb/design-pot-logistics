@@ -2,6 +2,7 @@ import hashlib
 from datetime import datetime, time, timedelta
 from decimal import Decimal
 
+from django import forms
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
@@ -28,14 +29,21 @@ from .models import (
     Organization,
     Resource,
     RunStop,
+    User,
 )
 from .services import emit_event
+from .social_auth import google_oauth_configured
 
 
 class SignInView(LoginView):
     template_name = "registration/login.html"
     authentication_form = SignInForm
     redirect_authenticated_user = True
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["google_oauth_enabled"] = google_oauth_configured()
+        return context
 
     def post(self, request, *args, **kwargs):
         # No forwarded header trust. Configure proxy rate limiting before public deployment.
@@ -70,6 +78,8 @@ class SignInView(LoginView):
 
 @login_required
 def home(request):
+    if request.user.role in ("rider", "driver") and not request.user.operational_access_approved:
+        return redirect("field-pending")
     prefix = (
         "admin"
         if request.user.role == "admin"
@@ -83,6 +93,11 @@ def home(request):
 def check_portal(request, portal):
     allowed = {"admin": ("admin",), "client": ("client",), "field": ("rider", "driver")}
     if request.user.role not in allowed.get(portal, ()):
+        raise PermissionDenied
+    if (
+        portal == "field"
+        and not request.user.operational_access_approved
+    ):
         raise PermissionDenied
 
 
@@ -201,6 +216,9 @@ def page(request, portal, section):
         )
         return render(request, "operations/deliveries.html", context)
     if section == "fleet":
+        context["pending_field_users"] = User.objects.filter(
+            role__in=[User.Role.RIDER, User.Role.DRIVER], operational_access_approved=False
+        ).order_by("date_joined", "pk")
         context["fleet"] = Paginator(
             Resource.objects.select_related("user").order_by("user__first_name", "pk"), 20
         ).get_page(request.GET.get("page"))
@@ -257,6 +275,58 @@ def page(request, portal, section):
     }
     context["empty_title"], context["empty_description"] = descriptions[section]
     return render(request, "operations/upcoming.html", context)
+
+
+@login_required
+def field_pending(request):
+    if request.user.role not in ("rider", "driver"):
+        raise PermissionDenied
+    if request.user.operational_access_approved:
+        return redirect("home")
+    return render(request, "registration/field_pending.html")
+
+
+@login_required
+@require_POST
+def approve_field_account(request, user_id):
+    if request.user.role != User.Role.ADMIN:
+        raise PermissionDenied
+
+    class VehicleForm(forms.Form):
+        vehicle_name = forms.CharField(max_length=80)
+        registration = forms.RegexField(r"^[A-Za-z0-9 -]{2,30}$", max_length=30)
+
+    form = VehicleForm(request.POST)
+    if not form.is_valid():
+        messages.error(request, "Enter a valid vehicle name and registration to approve access.")
+        return redirect("workspace", portal="admin", section="fleet")
+    with transaction.atomic():
+        person = get_object_or_404(
+            User.objects.select_for_update(),
+            pk=user_id,
+            role__in=[User.Role.RIDER, User.Role.DRIVER],
+            operational_access_approved=False,
+        )
+        if Resource.objects.filter(user=person).exists():
+            messages.error(request, "This account already has a vehicle profile.")
+            return redirect("workspace", portal="admin", section="fleet")
+        vehicle_type = "bike" if person.role == User.Role.RIDER else "car"
+        Resource.objects.create(
+            user=person,
+            vehicle_type=vehicle_type,
+            vehicle_name=form.cleaned_data["vehicle_name"].strip(),
+            registration=form.cleaned_data["registration"].strip().upper(),
+            status="off_duty",
+        )
+        person.operational_access_approved = True
+        person.save(update_fields=["operational_access_approved"])
+        DomainEvent.objects.create(
+            actor=request.user,
+            kind="field_access.approved",
+            payload={"user_id": person.pk, "role": person.role, "vehicle_type": vehicle_type},
+        )
+    messages.success(request, f"{person.get_full_name()} is approved and linked to a {vehicle_type}.")
+    return redirect("workspace", portal="admin", section="fleet")
 
 
 @login_required

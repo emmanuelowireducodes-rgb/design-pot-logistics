@@ -8,7 +8,7 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.paginator import Paginator
 from django.db.models import OuterRef, Prefetch, Q, Subquery, Sum, Value
 from django.db.models.functions import Concat
-from django.http import FileResponse, Http404
+from django.http import Http404, HttpResponseBadRequest
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 
@@ -415,20 +415,18 @@ def status_action(request, delivery_id, target):
 @roles_required("rider", "driver")
 def complete(request, delivery_id):
     delivery = get_object_or_404(visible_deliveries(request.user), pk=delivery_id)
+    if request.method == "POST" and request.FILES:
+        return HttpResponseBadRequest("Delivery image uploads are not accepted.")
     form = CompletionForm(
         request.POST or None,
-        request.FILES or None,
         initial={"request_key": uuid.uuid4(), "recipient_name": delivery.recipient_name},
     )
-    if getattr(request, "pod_upload_rejected", False):
-        form.is_valid()
-        form.add_error("photo", "Choose a photo smaller than 5 MB.")
     if request.method == "POST" and form.is_valid():
         try:
             workflow.complete_delivery(
                 actor=request.user, delivery_id=delivery.pk, **form.cleaned_data
             )
-            messages.success(request, "Delivery completed. Proof of delivery has been saved.")
+            messages.success(request, "Delivery completed and operational details recorded.")
             run_stop = RunStop.objects.filter(delivery=delivery).select_related("run").order_by("-run__created_at").first()
             if run_stop:
                 return redirect("field-run", run_id=run_stop.run_id)
@@ -444,8 +442,7 @@ def complete(request, delivery_id):
             "form": form,
             "delivery": delivery,
             "action_label": "Complete delivery",
-            "upload": True,
-            "description": "Record who received the package and attach a clear delivery photo. JPEG or PNG, up to 5 MB / 16 megapixels. Any expected COD must be collected first.",
+            "description": "Record who received the package. Any expected COD must be collected first.",
         },
     )
 
@@ -501,28 +498,6 @@ def reconcile(request, delivery_id):
             "description": "Confirm that the collected product payment has been received and checked. This does not record settlement to the client.",
         },
     )
-
-
-@login_required
-def proof_photo(request, delivery_id):
-    delivery = get_object_or_404(
-        visible_deliveries(request.user), pk=delivery_id, status="delivered"
-    )
-    proof = getattr(delivery, "proof", None)
-    if not proof or not proof.photo:
-        raise Http404
-    try:
-        response = FileResponse(
-            proof.photo.open("rb"),
-            content_type="image/jpeg",
-            as_attachment=True,
-            filename=f"{delivery.reference}-proof.jpg",
-        )
-    except FileNotFoundError as exc:
-        raise Http404 from exc
-    response["Cache-Control"] = "private, no-store"
-    response["X-Content-Type-Options"] = "nosniff"
-    return response
 
 
 @roles_required("admin")

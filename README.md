@@ -1,6 +1,6 @@
 # DESIGN-POT LOGISTICS
 
-Phase 2 connects booking, development quotes, confirmation, manual dispatch, delivery progress, private photo POD and COD reconciliation. Django architecture and Phase 1 roles/design are preserved. Read [Phase 2 setup, routes and limitations](docs/PHASE2.md). V1 location entry is manual and uses Design-Pot operational zones plus optional client-supplied Google Maps links; no Google Maps Platform key, API or billing account is required. See [V1 location and navigation](docs/PHASE25_V1_LOCATION.md).
+Phase 2 connects booking, development quotes, confirmation, manual dispatch, delivery progress, lightweight recipient-based delivery completion and COD reconciliation. Django architecture and Phase 1 roles/design are preserved. Read [Phase 2 setup, routes and limitations](docs/PHASE2.md). V1 location entry is manual and uses Design-Pot operational zones plus optional client-supplied Google Maps links; no Google Maps Platform key, API or billing account is required. See [V1 location and navigation](docs/PHASE25_V1_LOCATION.md).
 
 ## Local setup (PowerShell)
 
@@ -34,10 +34,10 @@ Usernames: `demo.admin`, `demo.client`, `demo.rider`, `demo.driver`. All use the
 ## Routes
 
 - `/login/`: secure session sign-in; `/logout/` accepts POST only.
-- `/admin/dashboard/`: operations overview; deliveries, fleet, clients, notifications and account views.
+- `/admin/dashboard/`: operations overview; deliveries, fleet, clients, notifications and account views. New Rider/Driver Google signups remain pending until Admin links a vehicle.
 - `/client/dashboard/`: organization-scoped overview and delivery history.
 - `/field/dashboard/`: mobile rider/driver workspace and assigned delivery cards.
-- `/deliveries/<uuid>/`: scoped details, status history and available POD.
+- `/deliveries/<uuid>/`: scoped details, status history and recipient/note completion details.
 - `/admin/components/`: design system reference.
 - Booking, quotes, dispatch, calendar, finance/COD settlement tracking, management reports and development pricing are functional. Settlement tracking records an Admin-reported remittance; it does not move funds.
 
@@ -57,12 +57,22 @@ Django has no JavaScript bundle build; collectstatic builds fingerprinted, compr
 
 ## Production configuration
 
-See `.env.example`. Environment values are read from the process, not automatically from a .env file. Set `DPOT_ENV=production`, a random `DJANGO_SECRET_KEY` of 50+ characters, explicit `DJANGO_ALLOWED_HOSTS`, trusted HTTPS origins if needed, and PostgreSQL connection variables. Demo mode must be off. Use `DPOT_POSTGRES=1` to test PostgreSQL in development; `PGSSLMODE=disable` is for an isolated local test service only.
+See `.env.example` for safe placeholders. In local development, copy it to the ignored repository-root `.env`; Django loads it without overriding values already present in the process environment. Production skips `.env` and uses the hosting environment variables. Set `DPOT_ENV=production`, a random `DJANGO_SECRET_KEY` of 50+ characters, explicit `DJANGO_ALLOWED_HOSTS`, trusted HTTPS origins if needed, and PostgreSQL connection variables. Demo mode must be off. Use `DPOT_POSTGRES=1` to test PostgreSQL in development; `PGSSLMODE=disable` is for an isolated local test service only.
 
 Install `requirements.lock`, provision PostgreSQL, run migrations and collectstatic, then serve `config.wsgi:application` with an appropriate production WSGI server behind HTTPS. The development server is not a production deployment. Configure proxy trust, edge rate limits, logging, backup/restore and monitoring for the selected host. Use an application database role without schema/trigger modification privileges after a separate migration role applies migrations. Run `manage.py check --deploy` in the real production environment.
 
-No map keys, SMS, WhatsApp, email, payment or storage service is needed in Phase 1. Production PostgreSQL and hosting have not been provisioned.
+Google OAuth is optional until its environment variables are configured. No map keys, SMS, WhatsApp, email, payment or file-storage service is needed for V1 delivery completion. Production PostgreSQL and hosting have not been provisioned.
 
 Read [architecture](docs/ARCHITECTURE.md), [design system](docs/DESIGN_SYSTEM.md) and [verification report](docs/VERIFICATION.md). Phase 2.5 V1 location decisions are in [the location note](docs/PHASE25_V1_LOCATION.md); Phase 3 dispatch runs are described in [the Phase 3 guide](docs/PHASE3_DISPATCH_RUNS.md), with results in [the Phase 3 verification report](docs/PHASE3_VERIFICATION.md). Phase 4 money definitions and reporting timestamps are in [the finance and reporting guide](docs/PHASE4_FINANCE.md).
 
 See [V1 release readiness](docs/V1_RELEASE_READINESS.md) for production setup, Web Push, operational workflows and outstanding release gates.
+
+## Google sign-in and field approval
+
+Set `GOOGLE_OAUTH_CLIENT_ID` and `GOOGLE_OAUTH_CLIENT_SECRET` in the local ignored `.env` or hosting environment to enable Google sign-in. Do not put real values in `.env.example`. Google authenticates identity only; onboarding allows Client, Rider, or Driver and never Admin. Clients activate after required profile completion. Rider/Driver accounts remain pending until an Admin approves the request and links a bike/car profile in **Admin ? Riders & drivers**. Existing username/password Admin sign-in stays at `/login/`. Email collisions never auto-link accounts; the user must access the existing Design-Pot account. Google access tokens are not stored.
+
+In Google Cloud Console, add the authorized redirect URI `https://<render-production-hostname>/accounts/google/login/callback/` after Render assigns the production hostname. Local callback URI is `http://127.0.0.1:8000/accounts/google/login/callback/`. OAuth state protection and PKCE are handled by django-allauth.
+
+## PostgreSQL test limitation
+
+This Windows workspace has no local PostgreSQL server, Docker/Podman runtime, or PostgreSQL service available. The persistent Supabase project is production and is never used for test database create/drop. See [the isolated PostgreSQL test note](docs/POSTGRESQL_TESTING.md); SQLite tests do not prove PostgreSQL row-lock behavior.

@@ -1,11 +1,14 @@
 from django.conf import settings
 
+from .social_auth import google_oauth_configured
+
 ADMIN_NAV = [
     ("dashboard", "Overview", "◫"),
     ("deliveries", "Deliveries", "▤"),
     ("dispatch", "Dispatch", "⇄"),
     ("calendar", "Calendar", "▦"),
     ("fleet", "Riders & drivers", "♧"),
+    ("users", "User Management", "◎"),
     ("clients", "Clients", "◉"),
     ("finance", "Finance", "▣"),
     ("notifications", "Notifications", "♧"),
@@ -50,6 +53,7 @@ def shell(request):
     return {
         "csp_nonce": getattr(request, "csp_nonce", ""),
         "demo_mode": settings.DEMO_MODE,
+        "google_oauth_enabled": google_oauth_configured(),
         "navigation": [
             {"key": k, "label": label, "icon": icon, "url": f"/{prefix}/{k}/"}
             for k, label, icon in nav

@@ -186,13 +186,6 @@ class ActionForm(forms.Form):
 class CompletionForm(forms.Form):
     request_key = forms.UUIDField(widget=forms.HiddenInput)
     recipient_name = forms.CharField(label="Received by", max_length=120, required=False)
-    photo = forms.FileField(
-        label="Delivery photo",
-        required=False,
-        widget=forms.ClearableFileInput(
-            attrs={"accept": "image/jpeg,image/png", "capture": "environment"}
-        ),
-    )
     note = forms.CharField(
         label="Delivery note",
         required=False,

@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-heading"><div><div class="eyebrow">ACCESS &amp; ACCOUNTS</div><h1>User Management</h1><p class="muted">Review account access and manage passwords. Roles and organization access are read-only here.</p></div><a class="button secondary" href="{% url 'admin-password-change' %}">Change My Password</a></div>
+<section class="card user-management-card" aria-label="Application users">
+  <div class="table-scroll mobile-card-table user-management-table">
+    <table>
+      <thead><tr><th>User</th><th>Role</th><th>Status</th><th>Access</th><th>Joined / Last login</th><th>Actions</th></tr></thead>
+      <tbody>
+      {% for person in page_obj %}
+        <tr>
+          <td data-label="User"><strong>{{ person.get_full_name|default:person.username }}</strong><span class="user-subline">@{{ person.username }}</span>{% if person.email %}<span class="user-subline">{{ person.email }}</span>{% endif %}</td>
+          <td data-label="Role">{% if person.role == 'admin' %}Admin{% else %}{{ person.get_role_display }}{% endif %}</td>
+          <td data-label="Status"><span class="badge {% if person.is_active %}confirmed{% else %}failed{% endif %}">{% if person.is_active %}Active{% else %}Disabled{% endif %}</span></td>
+          <td data-label="Access">{% if person.role == 'rider' or person.role == 'driver' %}{% if person.operational_access_approved %}Approved{% else %}Pending approval{% endif %}{% else %}—{% endif %}<span class="user-subline">{% if person.has_local_password %}Local password{% elif person.google_linked %}Google sign-in only{% else %}No local password{% endif %}</span></td>
+          <td data-label="Joined / Last login">{{ person.date_joined|date:"j M Y" }}<span class="user-subline">{% if person.last_login %}{{ person.last_login|date:"j M Y, H:i" }}{% else %}Never signed in{% endif %}</span></td>
+          <td data-label="Actions"><div class="user-management-actions">
+            {% if person.has_local_password %}<a class="button secondary" href="{% url 'user-password-reset' person.pk %}">Reset Password</a>{% else %}<span class="muted small-text">{% if person.google_linked %}Google-managed password{% else %}Password unavailable{% endif %}</span>{% endif %}
+            {% if person.pk == user.pk %}<span class="muted small-text">Current account</span>{% else %}
+              <form method="post" action="{% url 'user-status-toggle' person.pk %}" data-confirm="{% if person.is_active %}Disable this user? This user will no longer be able to sign in until an Admin enables the account again.{% else %}Enable this user? They will be able to sign in again.{% endif %}">
+                {% csrf_token %}<button class="button {% if person.is_active %}danger-button{% else %}secondary{% endif %}" type="submit">{% if person.is_active %}Disable User{% else %}Enable User{% endif %}</button>
+              </form>
+            {% endif %}
+          </div></td>
+        </tr>
+      {% empty %}<tr><td colspan="6">No users are available.</td></tr>{% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% if page_obj.has_other_pages %}<nav class="pagination" aria-label="User pages">{% if page_obj.has_previous %}<a class="button secondary" href="?page={{ page_obj.previous_page_number }}">Previous</a>{% endif %}<span>Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</span>{% if page_obj.has_next %}<a class="button secondary" href="?page={{ page_obj.next_page_number }}">Next</a>{% endif %}</nav>{% endif %}
+{% endblock %}
