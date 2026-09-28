@@ -179,8 +179,9 @@ def assign_zone(*, actor, delivery_id, side, zone_id, reason):
         **{
             f.name: getattr(old, f.name)
             for f in Location._meta.fields
-            if f.name not in ("id", "created_at", "zone")
+            if f.name not in ("id", "created_at", "area", "zone")
         },
+        area=zone.name,
         zone=zone,
     )
     setattr(delivery, side, new)

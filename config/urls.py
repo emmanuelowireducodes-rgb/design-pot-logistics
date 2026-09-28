@@ -1,13 +1,16 @@
 from django.contrib.auth.views import LogoutView
 from django.urls import path
 
-from operations import finance_views, run_views, views
+from operations import finance_views, push, run_views, views
 from operations import operational_views as ops
 from operations import phase25_views as foundation
 
 urlpatterns = [
     path("manifest.webmanifest", foundation.manifest, name="manifest"),
     path("service-worker.js", foundation.service_worker, name="service-worker"),
+    path("notifications/push/subscription/", push.subscription, name="push-subscription"),
+    path("notifications/state/", views.notification_state, name="notification-state"),
+    path("notifications/read-all/", views.read_all_notifications, name="notifications-read-all"),
     path("offline/", foundation.offline, name="offline"),
     path(
         "client/deliveries/<uuid:delivery_id>/price-pending/",

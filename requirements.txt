@@ -3,3 +3,4 @@ psycopg[binary]>=3.2,<4
 whitenoise>=6.9,<7
 
 Pillow>=12.3,<13
+pywebpush>=2.5,<3

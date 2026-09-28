@@ -465,6 +465,7 @@ def service_worker(request):
         (Path(settings.BASE_DIR) / "static" / "service-worker.js")
         .read_text(encoding="utf-8")
         .replace("__ASSETS__", json.dumps(assets))
+        .replace("__ICON__", json.dumps(static("icon-192.png")))
     )
     response = HttpResponse(code, content_type="text/javascript")
     response["Cache-Control"] = "no-cache"

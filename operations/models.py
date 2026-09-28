@@ -493,6 +493,26 @@ class Notification(Record):
         ]
 
 
+class PushSubscription(Record):
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="push_subscriptions")
+    endpoint = models.URLField(max_length=2048, unique=True)
+    p256dh = models.CharField(max_length=200)
+    auth = models.CharField(max_length=100)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
+class PushOutbox(Record):
+    notification = models.OneToOneField(
+        Notification, on_delete=models.CASCADE, related_name="push_outbox"
+    )
+    attempts = models.PositiveSmallIntegerField(default=0)
+    sent_at = models.DateTimeField(null=True, blank=True)
+    last_error = models.CharField(max_length=80, blank=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["sent_at", "attempts", "created_at"])]
+
+
 class LocationUpdate(Record):
     resource = models.ForeignKey(Resource, on_delete=models.PROTECT)
     latitude = models.DecimalField(max_digits=10, decimal_places=7)

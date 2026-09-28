@@ -2,6 +2,7 @@ import hashlib
 from datetime import datetime, time, timedelta
 from decimal import Decimal
 
+from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.views import LoginView
@@ -9,9 +10,12 @@ from django.core.exceptions import PermissionDenied
 from django.core.paginator import Paginator
 from django.db import transaction
 from django.db.models import Count, Q, Sum
+from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
-from django.views.decorators.http import require_POST
+from django.utils.dateparse import parse_datetime
+from django.views.decorators.cache import never_cache
+from django.views.decorators.http import require_GET, require_POST
 
 from .access import visible_deliveries
 from .forms import DeliveryFilterForm, SignInForm
@@ -82,6 +86,7 @@ def page(request, portal, section):
     sections = {item["key"]: item["label"] for item in nav}
     if portal == "admin":
         sections["components"] = "Design system"
+        sections["live"] = "Live operations"
     if section == "components" and portal == "admin":
         return render(
             request, "operations/components.html", {"title": "Design system", "section": section}
@@ -166,6 +171,9 @@ def page(request, portal, section):
         )
         return render(request, "operations/clients.html", context)
     if section == "notifications":
+        context["unread_count"] = Notification.objects.filter(
+            recipient=request.user, read_at__isnull=True
+        ).count()
         context["page_obj"] = Paginator(
             Notification.objects.filter(recipient=request.user)
             .select_related("event")
@@ -174,6 +182,8 @@ def page(request, portal, section):
         ).get_page(request.GET.get("page"))
         return render(request, "operations/notifications.html", context)
     if section == "settings":
+        context["vapid_public_key"] = settings.VAPID_PUBLIC_KEY
+        context["web_push_configured"] = settings.WEB_PUSH_ENABLED
         return render(request, "operations/settings.html", context)
     descriptions = {
         "dispatch": (
@@ -249,3 +259,50 @@ def read_notification(request, notification_id):
         else "field"
     )
     return redirect(f"/{prefix}/notifications/")
+
+
+@login_required
+@require_POST
+def read_all_notifications(request):
+    with transaction.atomic():
+        unread = Notification.objects.select_for_update().filter(
+            recipient=request.user, read_at__isnull=True
+        )
+        unread_count = unread.count()
+        unread.update(read_at=timezone.now())
+        if unread_count:
+            DomainEvent.objects.create(
+                actor=request.user,
+                kind="notifications.read_all",
+                payload={"count": unread_count},
+            )
+    messages.success(request, "All notifications marked as read.")
+    prefix = "admin" if request.user.role == "admin" else "client" if request.user.role == "client" else "field"
+    return redirect(f"/{prefix}/notifications/")
+
+
+@login_required
+@require_GET
+@never_cache
+def notification_state(request):
+    cursor_text = request.GET.get("since", "")[:64]
+    cursor = parse_datetime(cursor_text) if cursor_text else timezone.now()
+    if cursor and timezone.is_naive(cursor):
+        cursor = timezone.make_aware(cursor, timezone.get_current_timezone())
+    query = Notification.objects.filter(recipient=request.user)
+    new_items = list(query.filter(created_at__gt=cursor).order_by("created_at", "pk")[:10]) if cursor else []
+    latest = (
+        new_items[-1].created_at
+        if len(new_items) == 10
+        else query.order_by("-created_at").values_list("created_at", flat=True).first()
+    )
+    return JsonResponse(
+        {
+            "unread": query.filter(read_at__isnull=True).count(),
+            "latest": latest.isoformat() if latest else cursor_text,
+            "items": [
+                {"title": item.title, "message": item.message, "id": str(item.pk)}
+                for item in new_items
+            ],
+        }
+    )

@@ -1,6 +1,7 @@
 from datetime import timedelta
 from typing import Protocol
 
+from django.conf import settings
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 
@@ -8,6 +9,7 @@ from .models import (
     Availability,
     DomainEvent,
     Notification,
+    PushOutbox,
     Resource,
     User,
 )
@@ -26,12 +28,15 @@ def emit_event(
     event = DomainEvent.objects.create(
         actor=actor, kind=kind, delivery=delivery, payload=payload or {}, request_key=request_key
     )
-    Notification.objects.bulk_create(
-        [
+    notifications = [
             Notification(event=event, recipient=user, title=title, message=message)
             for user in {user.pk: user for user in recipients}.values()
         ]
-    )
+    Notification.objects.bulk_create(notifications)
+    if settings.WEB_PUSH_ENABLED and notifications:
+        PushOutbox.objects.bulk_create(
+            [PushOutbox(notification=notification) for notification in notifications]
+        )
     return event
 
 

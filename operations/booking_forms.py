@@ -9,14 +9,12 @@ class BookingForm(forms.Form):
     pickup_zone = forms.ModelChoiceField(
         queryset=OperationalZone.objects.filter(active=True).order_by("name"),
         required=False,
-        empty_label="Select pickup area / zone",
-        label="Design-Pot pickup area / zone",
+        widget=forms.HiddenInput,
     )
     destination_zone = forms.ModelChoiceField(
         queryset=OperationalZone.objects.filter(active=True).order_by("name"),
         required=False,
-        empty_label="Select destination area / zone",
-        label="Design-Pot destination area / zone",
+        widget=forms.HiddenInput,
     )
     pickup_google_maps_url = forms.CharField(
         required=False,
@@ -37,12 +35,12 @@ class BookingForm(forms.Form):
     booking_key = forms.UUIDField(widget=forms.HiddenInput)
     revision = forms.IntegerField(min_value=0, initial=0, widget=forms.HiddenInput)
     pickup_address = forms.CharField(label="Pickup address", max_length=255)
-    pickup_area = forms.CharField(label="Pickup area", max_length=100)
+    pickup_area = forms.CharField(required=False, max_length=100, widget=forms.HiddenInput)
     pickup_instructions = forms.CharField(
         label="Pickup instructions", max_length=500, required=False
     )
     destination_address = forms.CharField(label="Destination address", max_length=255)
-    destination_area = forms.CharField(label="Destination area", max_length=100)
+    destination_area = forms.CharField(required=False, max_length=100, widget=forms.HiddenInput)
     destination_instructions = forms.CharField(
         label="Destination instructions", max_length=500, required=False
     )
@@ -102,8 +100,23 @@ class BookingForm(forms.Form):
         required=False,
     )
 
+    def __init__(self, *args, allow_zone_classification=False, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.allow_zone_classification = allow_zone_classification
+
     def clean(self):
         data = super().clean() or {}
+        if not self.allow_zone_classification:
+            # Public clients cannot choose pricing zones, including by editing
+            # a hidden form value. The internal service may receive an explicit
+            # authoritative classification from a trusted caller.
+            data["pickup_area"] = "Unclassified"
+            data["destination_area"] = "Unclassified"
+            data["pickup_zone"] = None
+            data["destination_zone"] = None
+        else:
+            data["pickup_area"] = data.get("pickup_area") or "Unclassified"
+            data["destination_area"] = data.get("destination_area") or "Unclassified"
         if data.get("service") == "premium":
             start, end = data.get("window_start"), data.get("window_end")
             if not start or not end or end <= start:

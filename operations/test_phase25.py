@@ -153,6 +153,7 @@ class Foundation25Tests(TestCase):
         self.assertContains(worker, "credentials: 'omit'")
         self.assertContains(worker, "request.method !== 'GET'")
         self.assertNotContains(worker, "__ASSETS__")
+        self.assertNotContains(worker, "__ICON__")
         self.assertContains(self.client.get("/offline/"), "No delivery changes have been queued")
 
     def test_operational_and_location_responses_are_no_store(self):
@@ -266,7 +267,8 @@ class Foundation25Tests(TestCase):
         self.assertRedirects(response, reverse("price-pending", args=[Delivery.objects.get().pk]))
         delivery = Delivery.objects.get()
         self.assertEqual(delivery.pickup.display_address, "Apartment 4, Ring Road")
-        self.assertEqual(delivery.pickup.zone_id, self.origin.pk)
+        self.assertIsNone(delivery.pickup.zone_id)
+        self.assertEqual(delivery.pickup.area, "Unclassified")
         self.assertEqual(delivery.pickup.google_maps_url, "")
         self.assertIsNone(delivery.pickup.latitude)
 
@@ -672,7 +674,9 @@ class Foundation25Tests(TestCase):
         self.client.force_login(self.customer)
         response = self.client.get("/client/booking/")
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Design-Pot pickup area / zone")
+        self.assertNotContains(response, "Design-Pot pickup area / zone")
+        self.assertNotContains(response, "Pickup area")
+        self.assertNotContains(response, "Destination area")
         self.assertContains(response, "Google Maps location link")
         self.assertNotContains(response, "maps.googleapis.com")
         self.assertNotContains(response, "places.googleapis.com")

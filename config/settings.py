@@ -89,9 +89,15 @@ SESSION_COOKIE_AGE = 28800
 SESSION_COOKIE_SECURE = PRODUCTION
 CSRF_COOKIE_SECURE = PRODUCTION
 SECURE_SSL_REDIRECT = PRODUCTION
-SECURE_HSTS_SECONDS = 31536000 if PRODUCTION else 0
-SECURE_HSTS_INCLUDE_SUBDOMAINS = PRODUCTION
-SECURE_HSTS_PRELOAD = PRODUCTION
+ENABLE_HSTS = PRODUCTION and os.getenv("DPOT_ENABLE_HSTS", "0") == "1"
+SECURE_HSTS_SECONDS = int(os.getenv("DPOT_HSTS_SECONDS", "31536000")) if ENABLE_HSTS else 0
+SECURE_HSTS_INCLUDE_SUBDOMAINS = ENABLE_HSTS and os.getenv("DPOT_HSTS_SUBDOMAINS", "0") == "1"
+SECURE_HSTS_PRELOAD = ENABLE_HSTS and os.getenv("DPOT_HSTS_PRELOAD", "0") == "1"
+SECURE_PROXY_SSL_HEADER = (
+    ("HTTP_X_FORWARDED_PROTO", "https")
+    if PRODUCTION and os.getenv("DPOT_TRUST_PROXY_SSL_HEADER") == "1"
+    else None
+)
 SECURE_CONTENT_TYPE_NOSNIFF = True
 X_FRAME_OPTIONS = "DENY"
 LANGUAGE_CODE = "en-gb"
@@ -108,6 +114,10 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # Optional provider adapters may use this short cache window when introduced.
 ROAD_ROUTE_CACHE_SECONDS = max(1, min(int(os.getenv("ROAD_ROUTE_CACHE_SECONDS", "300")), 900))
+VAPID_PUBLIC_KEY = os.getenv("DPOT_VAPID_PUBLIC_KEY", "")
+VAPID_PRIVATE_KEY = os.getenv("DPOT_VAPID_PRIVATE_KEY", "")
+VAPID_SUBJECT = os.getenv("DPOT_VAPID_SUBJECT", "")
+WEB_PUSH_ENABLED = bool(VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY and VAPID_SUBJECT)
 # A shared cache is required for multi-worker rate limiting and routing cost control.
 CACHES = {
     "default": {"BACKEND": "django.core.cache.backends.db.DatabaseCache", "LOCATION": "dpot_cache"}

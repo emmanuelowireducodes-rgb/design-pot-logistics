@@ -64,3 +64,5 @@ Install `requirements.lock`, provision PostgreSQL, run migrations and collectsta
 No map keys, SMS, WhatsApp, email, payment or storage service is needed in Phase 1. Production PostgreSQL and hosting have not been provisioned.
 
 Read [architecture](docs/ARCHITECTURE.md), [design system](docs/DESIGN_SYSTEM.md) and [verification report](docs/VERIFICATION.md). Phase 2.5 V1 location decisions are in [the location note](docs/PHASE25_V1_LOCATION.md); Phase 3 dispatch runs are described in [the Phase 3 guide](docs/PHASE3_DISPATCH_RUNS.md), with results in [the Phase 3 verification report](docs/PHASE3_VERIFICATION.md). Phase 4 money definitions and reporting timestamps are in [the finance and reporting guide](docs/PHASE4_FINANCE.md).
+
+See [V1 release readiness](docs/V1_RELEASE_READINESS.md) for production setup, Web Push, operational workflows and outstanding release gates.

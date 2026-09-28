@@ -7,7 +7,6 @@ ADMIN_NAV = [
     ("calendar", "Calendar", "▦"),
     ("fleet", "Riders & drivers", "♧"),
     ("clients", "Clients", "◉"),
-    ("live", "Live operations", "◎"),
     ("finance", "Finance", "▣"),
     ("notifications", "Notifications", "♧"),
     ("reports", "Reports", "▥"),
@@ -35,6 +34,19 @@ def shell(request):
     role = user.role if user.is_authenticated else ""
     nav = ADMIN_NAV if role == "admin" else CLIENT_NAV if role == "client" else FIELD_NAV
     prefix = "admin" if role == "admin" else "client" if role == "client" else "field"
+    unread_count = 0
+    notification_cursor = ""
+    if user.is_authenticated:
+        from .models import Notification
+
+        unread_count = Notification.objects.filter(recipient=user, read_at__isnull=True).count()
+        cursor_date = (
+            Notification.objects.filter(recipient=user)
+            .order_by("-created_at")
+            .values_list("created_at", flat=True)
+            .first()
+        )
+        notification_cursor = cursor_date.isoformat() if cursor_date else ""
     return {
         "csp_nonce": getattr(request, "csp_nonce", ""),
         "demo_mode": settings.DEMO_MODE,
@@ -49,4 +61,7 @@ def shell(request):
             "driver": "Driver workspace",
         }.get(role),
         "field_mode": role in ("rider", "driver"),
+        "notification_unread_count": unread_count,
+        "notification_cursor": notification_cursor,
+        "web_push_enabled": settings.WEB_PUSH_ENABLED,
     }

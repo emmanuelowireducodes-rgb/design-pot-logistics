@@ -126,7 +126,7 @@ def save_booking(*, actor, data, delivery_id=None):
     require_role(actor, "client")
     if not actor.organization_id:
         raise PermissionDenied
-    form = BookingForm(data)
+    form = BookingForm(data, allow_zone_classification=True)
     if not form.is_valid():
         raise ValidationError("Please correct the delivery details.")
     values = form.cleaned_data

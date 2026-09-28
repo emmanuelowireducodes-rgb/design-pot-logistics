@@ -9,3 +9,40 @@
 .skeleton{height:1em;border-radius:4px;background:#e9eee6;animation:pulse 1.3s ease-in-out infinite}.skeleton.line{width:80%;margin-bottom:12px}.skeleton.short{width:45%}@keyframes pulse{50%{opacity:.45}}
 
 .component-row{display:flex;gap:12px;flex-wrap:wrap;margin:22px 0}.tabs{display:flex;border-bottom:1px solid var(--line);gap:22px;margin-top:25px}.tabs a{padding:12px 2px;font-size:12px;color:var(--muted)}.tabs a[aria-current]{color:var(--brand);border-bottom:2px solid var(--brand)}dialog{border:1px solid var(--line);border-radius:14px;max-width:440px;width:calc(100% - 32px);box-shadow:0 25px 80px #16291c33}dialog::backdrop{background:#15251a66}.mobile-action-bar{display:flex;gap:12px;border-top:1px solid var(--line);padding-top:20px}.mobile-action-bar .button{flex:1;min-height:48px}
+
+.menu-toggle,.drawer-close,.drawer-backdrop{display:none}
+.sidebar[role=dialog]{outline:0}
+.sidebar .drawer-close{position:absolute;right:10px;top:12px;font-size:26px}
+.sidebar-bottom>form{padding:0 0 18px}
+.sign-out{width:100%;min-height:44px;justify-content:flex-start;color:#5c665e}
+.notification-bell{position:relative}
+.notification-bell svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.unread-count{position:absolute;right:-3px;top:-3px;min-width:17px;height:17px;padding:0 4px;display:grid;place-items:center;border:2px solid #fff;border-radius:20px;background:#aa5141;color:#fff;font-size:9px;line-height:1}
+.unread-count[hidden]{display:none}
+.notification-settings{max-width:760px;margin-top:22px}
+.notification-settings h2{margin-top:0}
+.notification-settings>[data-push-status]{margin:12px 0}
+.notification-settings .button{margin:6px 8px 4px 0}
+.in-app-toast{position:fixed;right:20px;bottom:20px;z-index:50;display:grid;gap:6px;width:min(360px,calc(100vw - 32px));padding:16px 18px;border:1px solid var(--line);border-radius:12px;background:#fff;box-shadow:0 12px 38px #152d2533;font-size:13px}
+.in-app-toast[hidden]{display:none}
+.in-app-toast a{font-weight:600;color:var(--brand)}
+@media(max-width:760px){
+ .menu-toggle{display:inline-flex;width:44px;height:44px;min-width:44px;font-size:24px;color:var(--ink);margin-left:-8px}
+ .topbar{gap:8px}.breadcrumb{min-width:0}.breadcrumb strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}
+ .topbar-right{gap:7px}.topbar-right>.avatar{display:none}
+ .sidebar{z-index:31;padding-top:28px;padding-bottom:env(safe-area-inset-bottom);overscroll-behavior:contain;overflow-y:auto}
+ .sidebar .drawer-close{display:inline-flex}
+ .sidebar>.brand{margin-top:30px;margin-bottom:28px}
+ .drawer-backdrop{position:fixed;inset:0;z-index:30;display:none;border:0;background:#10211977;touch-action:none}
+ .nav-open .drawer-backdrop{display:block}
+ .nav-open .sidebar{box-shadow:15px 0 42px #152d2540}
+ .workspace main{min-height:calc(100vh - 150px)}
+ .booking-form .padded{padding:17px}
+ .booking-form .form-section-title{margin-bottom:18px}
+ .booking-form .form-section-title p{font-size:12px;line-height:1.55}
+ .booking-form .form-field{margin-bottom:16px}
+ .booking-form .button.primary{min-height:50px;font-size:14px}
+ .notification-row{align-items:flex-start}
+ .notification-row h2{font-size:15px}
+ .notification-row p{overflow-wrap:anywhere}
+}
