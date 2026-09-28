@@ -191,3 +191,24 @@ document.querySelectorAll('[data-logout]').forEach(form => form.addEventListener
   } catch { /* Logout must proceed even if device unsubscribe fails. */ }
   form.submit();
 }));
+
+
+document.querySelectorAll('[data-mobile-filter]').forEach(panel => {
+  if (window.matchMedia('(max-width: 760px)').matches && panel.dataset.active !== 'true') {
+    panel.removeAttribute('open');
+  }
+});
+
+
+document.querySelectorAll('[data-booking-form]').forEach(form => {
+  form.addEventListener('submit', event => {
+    if (form.dataset.submitting === 'true') { event.preventDefault(); return; }
+    form.dataset.submitting = 'true';
+    document.querySelectorAll(`button[form="${form.id}"], button[type="submit"]`).forEach(button => {
+      if (!form.contains(button) && button.getAttribute('form') !== form.id) return;
+      button.disabled = true;
+      button.setAttribute('aria-busy', 'true');
+      button.textContent = 'Preparing quote...';
+    });
+  });
+});

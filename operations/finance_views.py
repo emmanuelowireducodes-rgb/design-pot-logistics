@@ -723,6 +723,7 @@ def admin_report(request, kind, export=False):
             "description": REPORTS[kind][1],
             "headers": headers,
             "rows": table_rows,
+            "mobile_rows": [list(zip(headers, row, strict=True)) for row in table_rows],
             "page_obj": page_obj,
             "form": form,
             "export_url": f"/admin/reports/{kind}/export.csv",

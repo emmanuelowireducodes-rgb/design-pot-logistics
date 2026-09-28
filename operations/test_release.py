@@ -81,9 +81,32 @@ class V1ReleaseTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Pickup address")
         self.assertContains(response, "Destination address")
+        self.assertContains(response, 'id="client-booking-form"')
+        self.assertContains(response, 'form="client-booking-form"')
+        self.assertContains(response, "Prepare quote")
         self.assertNotContains(response, "Pickup area")
         self.assertNotContains(response, "Destination area")
         self.assertNotContains(response, "operational zone")
+
+    def test_mobile_dashboards_prioritize_the_role_primary_task(self):
+        self.client.force_login(self.client_user)
+        client_home = self.client.get("/client/dashboard/")
+        self.assertEqual(client_home.status_code, 200)
+        self.assertContains(client_home, 'class="client-phone-dashboard"')
+        self.assertContains(client_home, "Book a delivery")
+        self.assertContains(client_home, "Active deliveries")
+
+        self.client.force_login(self.admin)
+        admin_home = self.client.get("/admin/dashboard/")
+        self.assertEqual(admin_home.status_code, 200)
+        self.assertContains(admin_home, 'class="admin-phone-dashboard"')
+        self.assertContains(admin_home, "Needs attention.")
+        self.assertContains(admin_home, "Quotes to review")
+        self.assertContains(admin_home, "Open dispatch")
+
+        dispatch = self.client.get("/admin/dispatch/")
+        self.assertContains(dispatch, 'class="mobile-filter-panel"')
+        self.assertContains(dispatch, 'class="table-scroll mobile-card-table"')
 
     def test_simple_written_booking_keeps_both_zones_unclassified(self):
         data = {

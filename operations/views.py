@@ -19,7 +19,16 @@ from django.views.decorators.http import require_GET, require_POST
 
 from .access import visible_deliveries
 from .forms import DeliveryFilterForm, SignInForm
-from .models import DomainEvent, LedgerEntry, LoginAttempt, Notification, Organization, Resource
+from .models import (
+    DeliveryRun,
+    DomainEvent,
+    LedgerEntry,
+    LoginAttempt,
+    Notification,
+    Organization,
+    Resource,
+    RunStop,
+)
 from .services import emit_event
 
 
@@ -132,6 +141,33 @@ def page(request, portal, section):
             context["cod_pending"] = sums.get("cod_collected", Decimal(0)) - sums.get(
                 "cod_reconciled", Decimal(0)
             )
+            active_memberships = RunStop.objects.filter(
+                run__status__in=[
+                    DeliveryRun.Status.DRAFT,
+                    DeliveryRun.Status.READY,
+                    DeliveryRun.Status.IN_PROGRESS,
+                ]
+            ).exclude(status=RunStop.Status.REMOVED).values("delivery_id")
+            context["admin_attention"] = {
+                "quotes": deliveries.filter(job__quote_requested=True).count(),
+                "dispatch": deliveries.filter(status="confirmed")
+                .exclude(pk__in=active_memberships)
+                .count(),
+                "runs": DeliveryRun.objects.filter(
+                    status__in=[DeliveryRun.Status.READY, DeliveryRun.Status.IN_PROGRESS]
+                ).count(),
+                "exceptions": deliveries.filter(
+                    status__in=["failed", "unreachable", "returned", "rescheduled"]
+                ).count(),
+                "cod_pending": context["cod_pending"],
+                "unread": Notification.objects.filter(
+                    recipient=request.user, read_at__isnull=True
+                ).count(),
+            }
+        elif portal == "client":
+            context["active_deliveries"] = deliveries.exclude(
+                status__in=["delivered", "cancelled"]
+            ).order_by("-created_at")[:4]
         return render(request, "operations/dashboard.html", context)
     if section == "deliveries":
         form = DeliveryFilterForm(request.GET)
@@ -144,11 +180,15 @@ def page(request, portal, section):
                     | Q(destination__area__icontains=q)
                 )
             if form.cleaned_data["status"]:
-                deliveries = (
-                    deliveries.filter(status__in=["requested", "confirmed"])
-                    if form.cleaned_data["status"] == "unassigned"
-                    else deliveries.filter(status=form.cleaned_data["status"])
-                )
+                status = form.cleaned_data["status"]
+                if status == "unassigned":
+                    deliveries = deliveries.filter(status__in=["requested", "confirmed"])
+                elif status == "issues":
+                    deliveries = deliveries.filter(
+                        status__in=["failed", "unreachable", "returned", "rescheduled"]
+                    )
+                else:
+                    deliveries = deliveries.filter(status=status)
         context.update(
             {
                 "filter_form": form,

@@ -32,5 +32,6 @@ class DeliveryFilterForm(forms.Form):
             ("in_transit", "In transit"),
             ("delivered", "Delivered"),
             ("failed", "Failed delivery"),
+            ("issues", "Delivery exceptions"),
         ],
     )
