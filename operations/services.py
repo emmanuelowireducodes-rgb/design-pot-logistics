@@ -88,3 +88,37 @@ def reserve_resource(*, actor, resource_id, starts_at, ends_at, kind, note="", r
         request_key=request_key,
     )
     return block
+
+
+@transaction.atomic
+def set_resource_duty_status(*, actor, resource_id, duty_status):
+    """Change the current duty state without changing date-specific schedule blocks."""
+    if actor.role != User.Role.ADMIN or not actor.is_active:
+        raise PermissionDenied
+    status_by_duty = {"on_duty": "available", "off_duty": "off_duty"}
+    if duty_status not in status_by_duty:
+        raise ValidationError("Choose On Duty or Off Duty.")
+
+    resource = Resource.objects.select_for_update().select_related("user").get(pk=resource_id)
+    if resource.user.role not in (User.Role.RIDER, User.Role.DRIVER):
+        raise ValidationError("Duty status is only available for Riders and Drivers.")
+    if not resource.user.operational_access_approved:
+        raise ValidationError("Approve this Rider or Driver before changing duty status.")
+
+    old_state = "off_duty" if resource.status == "off_duty" else "on_duty"
+    if old_state == duty_status:
+        return resource
+
+    resource.status = status_by_duty[duty_status]
+    resource.save(update_fields=["status"])
+    DomainEvent.objects.create(
+        actor=actor,
+        kind="resource.duty_status_changed",
+        payload={
+            "target_resource_id": str(resource.pk),
+            "target_user_id": str(resource.user_id),
+            "old_state": old_state,
+            "new_state": duty_status,
+        },
+    )
+    return resource

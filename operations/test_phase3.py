@@ -96,6 +96,7 @@ class DeliveryRunTests(TestCase):
             None,
         )
         self.assertIsNotNone(lock_query)
+        assert lock_query is not None
         self.assertIn(f'FOR UPDATE OF "operations_{table}"', lock_query)
 
     @skipUnlessDBFeature("has_select_for_update")

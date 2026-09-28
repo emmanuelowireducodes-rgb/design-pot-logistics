@@ -11,6 +11,7 @@ from django.db.models.functions import Concat
 from django.http import Http404, HttpResponseBadRequest
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
+from django.views.decorators.http import require_POST
 
 from . import workflow
 from .access import roles_required, visible_deliveries
@@ -38,7 +39,7 @@ from .models import (
     RunStop,
 )
 from .pricing import active_version
-from .services import reserve_resource
+from .services import reserve_resource, set_resource_duty_status
 
 GROUPS = {
     "unassigned": ["requested", "confirmed"],
@@ -593,6 +594,24 @@ def availability(request):
             "q": q,
         },
     )
+
+
+@roles_required("admin")
+@require_POST
+def resource_duty(request, resource_id):
+    resource = get_object_or_404(Resource, pk=resource_id)
+    try:
+        resource = set_resource_duty_status(
+            actor=request.user,
+            resource_id=resource.pk,
+            duty_status=request.POST.get("duty_status", ""),
+        )
+    except ValidationError as exc:
+        messages.error(request, " ".join(exc.messages))
+    else:
+        state = "On Duty" if resource.status != "off_duty" else "Off Duty"
+        messages.success(request, f"{resource.user.get_full_name()} is now {state}.")
+    return redirect("workspace", portal="admin", section="fleet")
 
 
 @login_required

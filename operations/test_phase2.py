@@ -663,6 +663,175 @@ class Phase2Tests(TestCase):
         self.assertEqual(DomainEvent.objects.filter(kind="availability.created").count(), 1)
         self.assertEqual(Notification.objects.filter(recipient=self.rider).count(), 1)
 
+    def test_admin_can_set_rider_and_driver_duty_states(self):
+        self.client.force_login(self.admin)
+        for resource in (self.bike, self.car):
+            with self.subTest(resource=resource.pk):
+                resource.status = "off_duty"
+                resource.save(update_fields=["status"])
+                response = self.client.post(
+                    reverse("resource-duty", args=[resource.pk]), {"duty_status": "on_duty"}
+                )
+                self.assertEqual(response.status_code, 302)
+                resource.refresh_from_db()
+                self.assertEqual(resource.status, "available")
+                resource.user.refresh_from_db()
+                self.assertTrue(resource.user.is_active)
+                self.assertTrue(resource.user.operational_access_approved)
+
+                response = self.client.post(
+                    reverse("resource-duty", args=[resource.pk]), {"duty_status": "off_duty"}
+                )
+                self.assertEqual(response.status_code, 302)
+                resource.refresh_from_db()
+                self.assertEqual(resource.status, "off_duty")
+
+    def test_fleet_shows_current_duty_state_and_action(self):
+        self.bike.status = "off_duty"
+        self.bike.save(update_fields=["status"])
+        self.client.force_login(self.admin)
+
+        response = self.client.get("/admin/fleet/")
+
+        self.assertContains(response, "Duty status")
+        self.assertContains(response, "Off Duty")
+        self.assertContains(response, "Set On Duty")
+        self.assertContains(response, "Set Off Duty")
+        self.assertContains(response, "Schedule blocks still apply to their dates and times.")
+
+    def test_duty_status_changes_are_audited(self):
+        self.client.force_login(self.admin)
+        self.bike.status = "off_duty"
+        self.bike.save(update_fields=["status"])
+
+        response = self.client.post(
+            reverse("resource-duty", args=[self.bike.pk]), {"duty_status": "on_duty"}
+        )
+
+        self.assertEqual(response.status_code, 302)
+        event = DomainEvent.objects.get(kind="resource.duty_status_changed")
+        self.assertEqual(event.actor, self.admin)
+        self.assertEqual(
+            event.payload,
+            {
+                "target_resource_id": str(self.bike.pk),
+                "target_user_id": str(self.rider.pk),
+                "old_state": "off_duty",
+                "new_state": "on_duty",
+            },
+        )
+        self.assertIsNotNone(event.created_at)
+
+    def test_only_admin_post_can_change_duty_status(self):
+        url = reverse("resource-duty", args=[self.bike.pk])
+        self.client.force_login(self.admin)
+        self.assertEqual(self.client.get(url).status_code, 405)
+
+        for actor in (self.customer, self.rider, self.driver):
+            with self.subTest(actor=actor.pk):
+                self.client.force_login(actor)
+                self.assertEqual(
+                    self.client.post(url, {"duty_status": "on_duty"}).status_code, 403
+                )
+        self.bike.refresh_from_db()
+        self.assertEqual(self.bike.status, "available")
+
+    def test_duty_status_post_keeps_csrf_protection(self):
+        strict = Client(enforce_csrf_checks=True)
+        strict.force_login(self.admin)
+        page = strict.get("/admin/fleet/")
+        self.assertEqual(page.status_code, 200)
+        url = reverse("resource-duty", args=[self.bike.pk])
+        data = {"duty_status": "on_duty"}
+        self.assertEqual(strict.post(url, data).status_code, 403)
+
+        csrf_token = strict.cookies["csrftoken"].value
+        response = strict.post(url, data, HTTP_X_CSRFTOKEN=csrf_token)
+        self.assertEqual(response.status_code, 302)
+
+    def test_on_duty_preserves_blocks_and_blocks_still_protect_only_their_window(self):
+        self.client.force_login(self.admin)
+        starts_at = timezone.now() + timedelta(days=1)
+        ends_at = starts_at + timedelta(hours=1)
+        resources = ((self.bike, "bike"), (self.car, "car"))
+
+        for resource, vehicle in resources:
+            with self.subTest(vehicle=vehicle):
+                resource.status = "off_duty"
+                resource.save(update_fields=["status"])
+                self.assertEqual(
+                    self.client.post(
+                        "/admin/availability/",
+                        {
+                            "request_key": uuid.uuid4(),
+                            "resource": resource.pk,
+                            "kind": "off_duty",
+                            "starts_at": starts_at.isoformat(),
+                            "ends_at": ends_at.isoformat(),
+                            "note": "Planned time away",
+                        },
+                    ).status_code,
+                    302,
+                )
+                block = Availability.objects.get(resource=resource, kind="off_duty")
+
+                self.assertEqual(
+                    self.client.post(
+                        reverse("resource-duty", args=[resource.pk]),
+                        {"duty_status": "on_duty"},
+                    ).status_code,
+                    302,
+                )
+                resource.refresh_from_db()
+                self.assertEqual(resource.status, "available")
+                block.refresh_from_db()
+                self.assertIsNone(block.cancelled_at)
+
+                delivery = self.confirmed(vehicle_type=vehicle)
+                with self.assertRaises(ValidationError):
+                    self.assign(
+                        delivery,
+                        resource_id=resource.pk,
+                        starts_at=block.starts_at + timedelta(minutes=5),
+                        ends_at=block.ends_at - timedelta(minutes=5),
+                    )
+
+                assignment = self.assign(
+                    delivery,
+                    resource_id=resource.pk,
+                    starts_at=block.ends_at + timedelta(minutes=15),
+                    ends_at=block.ends_at + timedelta(hours=1),
+                )
+                self.assertEqual(assignment.resource_id, resource.pk)
+                block.refresh_from_db()
+                self.assertIsNone(block.cancelled_at)
+
+    def test_expired_block_does_not_prevent_admin_returning_resource_to_duty(self):
+        now = timezone.now()
+        block = Availability.objects.create(
+            resource=self.bike,
+            starts_at=now - timedelta(days=2),
+            ends_at=now - timedelta(days=1),
+            kind="off_duty",
+            note="Completed time away",
+        )
+        self.bike.status = "off_duty"
+        self.bike.save(update_fields=["status"])
+        self.client.force_login(self.admin)
+
+        response = self.client.post(
+            reverse("resource-duty", args=[self.bike.pk]), {"duty_status": "on_duty"}
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.bike.refresh_from_db()
+        self.assertEqual(self.bike.status, "available")
+        block.refresh_from_db()
+        self.assertIsNone(block.cancelled_at)
+        delivery = self.confirmed()
+        assignment = self.assign(delivery)
+        self.assertEqual(assignment.resource_id, self.bike.pk)
+
     def test_driver_car_and_premium_workflow(self):
         start = timezone.now() + timedelta(days=1)
         delivery = self.confirmed(

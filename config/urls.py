@@ -58,6 +58,7 @@ urlpatterns = [
     path("accounts/", include("allauth.urls")),
     path("field/pending/", views.field_pending, name="field-pending"),
     path("admin/fleet/approve/<int:user_id>/", views.approve_field_account, name="approve-field-account"),
+    path("admin/fleet/<uuid:resource_id>/duty/", ops.resource_duty, name="resource-duty"),
     path("logout/", LogoutView.as_view(), name="logout"),
     path("client/booking/", ops.booking, name="booking"),
     path("client/deliveries/<uuid:delivery_id>/edit/", ops.booking, name="edit-booking"),
