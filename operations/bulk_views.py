@@ -165,7 +165,7 @@ def bulk_booking(request):
             messages.success(request, f"{len(prepared)} deliveries prepared. Review available prices below.")
             return redirect("bulk-booking-detail", bulk_id=batch.pk)
     return render(request, "operations/bulk_booking.html", {
-        "title": "Bulk delivery entry", "section": "booking", "common": common, "rows": rows,
+        "title": "Bulk delivery entry", "section": "bulk-booking", "common": common, "rows": rows,
     })
 
 
@@ -208,7 +208,7 @@ def bulk_booking_detail(request, bulk_id):
             subtotal += current_quote.amount
     context_rows = [{"delivery": d, "confirmed": bool(d and d.job_id in confirmed_ids)} for d in deliveries]
     return render(request, "operations/bulk_booking_detail.html", {
-        "title": "Bulk delivery request", "section": "booking", "batch": batch,
+        "title": "Bulk delivery request", "section": "bulk-booking", "batch": batch,
         "rows": context_rows, "priced_count": len(priced),
         "quote_required_count": sum(bool(d and d.job.quote_requested) for d in deliveries),
         "subtotal": subtotal, "quote_ids": quote_ids,

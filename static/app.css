@@ -53,6 +53,8 @@
 /* V1 release mobile hierarchy and row layouts. */
 .client-phone-dashboard,.admin-phone-dashboard{display:none}
 .client-book-action,.admin-mobile-dispatch{width:100%;min-height:52px;font-size:15px;margin:0 0 28px}
+.client-book-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:0 0 28px}
+.client-book-actions .button{display:flex;align-items:center;justify-content:center;gap:8px;min-width:0;min-height:56px;text-align:center}
 .client-active-list,.attention-list{display:grid;gap:10px}
 .client-active-item,.attention-list>a{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:15px;background:var(--surface);border:1px solid var(--line);border-radius:12px;min-height:64px}
 .client-active-item{align-items:flex-start;flex-direction:column}

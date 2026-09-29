@@ -7,7 +7,7 @@ from unittest.mock import Mock, patch
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from django.test import TestCase, override_settings
-from django.urls import reverse
+from django.urls import resolve, reverse
 from py_vapid import Vapid
 from pywebpush import WebPusher, webpush
 
@@ -106,8 +106,14 @@ class V1ReleaseTests(TestCase):
         client_home = self.client.get("/client/dashboard/")
         self.assertEqual(client_home.status_code, 200)
         self.assertContains(client_home, 'class="client-phone-dashboard"')
-        self.assertContains(client_home, "Book a delivery")
+        self.assertContains(client_home, "New Delivery")
+        self.assertContains(client_home, "Bulk Delivery")
+        self.assertContains(client_home, f'href="{reverse("booking")}"')
+        bulk_url = reverse("bulk-booking")
+        self.assertContains(client_home, f'href="{bulk_url}"')
+        self.assertEqual(resolve(bulk_url).url_name, "bulk-booking")
         self.assertContains(client_home, "Active deliveries")
+        self.assertEqual(self.client.get(reverse("booking")).status_code, 200)
 
         self.client.force_login(self.admin)
         admin_home = self.client.get("/admin/dashboard/")

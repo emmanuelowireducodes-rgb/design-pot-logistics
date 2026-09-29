@@ -9,6 +9,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from . import price_cards, pricing, workflow
+from .bulk_views import BulkRows
 from .models import (
     Assignment,
     BulkBooking,
@@ -178,6 +179,38 @@ class PriceCardBulkAndContactTests(TestCase):
             "rows-1-package_description": "Second parcel", "rows-1-vehicle_type": "bike",
             "rows-1-service": "standard", "rows-1-payment_method": "paid", "rows-1-cod_amount": "",
         }
+
+    def test_bulk_entry_explains_flow_shared_pickup_and_ten_rows(self):
+        self.client.force_login(self.client_user)
+        response = self.client.get(reverse("bulk-booking"))
+        self.assertEqual(response.status_code, 200)
+        for label in (
+            "Enter pickup details once",
+            "Price Card exists",
+            "Dispatch for a quote",
+            "Confirm eligible priced deliveries together",
+            "Add Another Delivery",
+            "Delivery 1",
+            "Delivery 2",
+            "Delivery 3",
+            "Delivery 10",
+        ):
+            self.assertContains(response, label)
+        self.assertContains(response, 'name="pickup_address"')
+        self.assertEqual(response.content.decode().count('name="pickup_address"'), 1)
+        formset = BulkRows(data={
+            "rows-TOTAL_FORMS": "11",
+            "rows-INITIAL_FORMS": "0",
+            "rows-MIN_NUM_FORMS": "1",
+            "rows-MAX_NUM_FORMS": "1000",
+        }, prefix="rows")
+        self.assertFalse(formset.is_valid())
+        self.assertIn("at most 10 forms", str(formset.non_form_errors()))
+
+    def test_bulk_creation_route_remains_client_only(self):
+        for user in (self.admin, self.rider_user, self.driver_user):
+            self.client.force_login(user)
+            self.assertEqual(self.client.get(reverse("bulk-booking")).status_code, 403)
 
     def test_bulk_shared_pickup_partial_pricing_and_independent_confirmation(self):
         self.rate()

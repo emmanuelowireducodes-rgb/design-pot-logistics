@@ -1,4 +1,5 @@
 from django.conf import settings
+from django.urls import reverse
 
 from .social_auth import google_oauth_configured
 
@@ -18,7 +19,8 @@ ADMIN_NAV = [
 ]
 CLIENT_NAV = [
     ("dashboard", "Overview", "◫"),
-    ("booking", "Create delivery", "+"),
+    ("booking", "New Delivery", "+"),
+    ("bulk-booking", "Bulk Delivery", "▦"),
     ("deliveries", "My deliveries", "▤"),
     ("finance", "Finance", "▣"),
     ("notifications", "Notifications", "♧"),
@@ -55,7 +57,13 @@ def shell(request):
         "demo_mode": settings.DEMO_MODE,
         "google_oauth_enabled": google_oauth_configured(),
         "navigation": [
-            {"key": k, "label": label, "icon": icon, "url": f"/{prefix}/{k}/"}
+            {
+                "key": k,
+                "label": label,
+                "icon": icon,
+                "url": reverse("bulk-booking") if role == "client" and k == "bulk-booking"
+                else f"/{prefix}/{k}/",
+            }
             for k, label, icon in nav
         ],
         "portal_label": {
