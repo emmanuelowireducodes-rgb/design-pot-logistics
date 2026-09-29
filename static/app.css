@@ -23,6 +23,9 @@
 .notification-settings h2{margin-top:0}
 .notification-settings>[data-push-status]{margin:12px 0}
 .notification-settings .button{margin:6px 8px 4px 0}
+.notification-row>.notification-actions{display:flex;flex:0 0 auto;gap:8px;align-items:center;margin-left:auto;flex-wrap:wrap}
+.notification-actions .button{min-height:38px}
+@media(max-width:760px){.notification-row>.notification-actions{flex:1 1 100%;width:100%;margin-left:17px}.notification-actions form{flex:1;padding:0}.notification-actions .button{width:100%}}
 .in-app-toast{position:fixed;right:20px;bottom:20px;z-index:50;display:grid;gap:6px;width:min(360px,calc(100vw - 32px));padding:16px 18px;border:1px solid var(--line);border-radius:12px;background:#fff;box-shadow:0 12px 38px #152d2533;font-size:13px}
 .in-app-toast[hidden]{display:none}
 .in-app-toast a{font-weight:600;color:var(--brand)}

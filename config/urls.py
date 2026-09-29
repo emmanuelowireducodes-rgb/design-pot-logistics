@@ -11,6 +11,7 @@ urlpatterns = [
     path("notifications/push/subscription/", push.subscription, name="push-subscription"),
     path("notifications/state/", views.notification_state, name="notification-state"),
     path("notifications/read-all/", views.read_all_notifications, name="notifications-read-all"),
+    path("notifications/clear/", views.clear_notifications, name="notifications-clear"),
     path("offline/", foundation.offline, name="offline"),
     path(
         "client/deliveries/<uuid:delivery_id>/price-pending/",
@@ -139,6 +140,16 @@ urlpatterns = [
         "notifications/<uuid:notification_id>/read/",
         views.read_notification,
         name="notification-read",
+    ),
+    path(
+        "notifications/<uuid:notification_id>/open/",
+        views.open_notification,
+        name="notification-open",
+    ),
+    path(
+        "notifications/<uuid:notification_id>/delete/",
+        views.delete_notification,
+        name="notification-delete",
     ),
     path("<str:portal>/<str:section>/", views.page, name="workspace"),
 ]

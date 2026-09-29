@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card padded">
+  <h1>Opening notification</h1>
+  <p class="muted">Taking you to the relevant Design-Pot page.</p>
+  <form method="post" action="{% url 'notification-open' notification_id %}" data-notification-open-bridge>{% csrf_token %}<button class="button primary">{% if destination %}Continue{% else %}View notifications{% endif %}</button></form>
+</section>
+{% endblock %}

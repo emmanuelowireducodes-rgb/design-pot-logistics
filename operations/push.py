@@ -10,6 +10,7 @@ from django.conf import settings
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.http import JsonResponse
+from django.urls import reverse
 from django.views.decorators.http import require_http_methods
 
 from .models import PushOutbox, PushSubscription
@@ -110,19 +111,11 @@ def deliver_pending(*, send=None, limit=100):
     sent = failed = removed = 0
     for item in pending:
         notification = item.notification
-        target = "notifications"
-        prefix = (
-            "admin"
-            if notification.recipient.role == "admin"
-            else "client"
-            if notification.recipient.role == "client"
-            else "field"
-        )
         payload = json.dumps(
             {
                 "title": "Design-Pot Logistics",
                 "body": "You have a new update. Open the app to view it.",
-                "url": f"/{prefix}/{target}/#notification-{notification.pk}",
+                "url": reverse("notification-open", kwargs={"notification_id": notification.pk}),
                 "tag": f"notification-{notification.pk}",
             }
         )

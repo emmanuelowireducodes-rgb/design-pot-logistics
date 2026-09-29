@@ -13,12 +13,14 @@ from .access import visible_deliveries
 from .models import (
     Assignment,
     Delivery,
+    DeliveryRun,
     DomainEvent,
     Job,
     Location,
     Notification,
     Organization,
     PricingVersion,
+    PushOutbox,
     Quote,
     QuoteConfirmation,
     Resource,
@@ -278,6 +280,150 @@ class FoundationTests(TestCase):
         notification.refresh_from_db()
         self.assertIsNotNone(notification.read_at)
         self.assertEqual(DomainEvent.objects.filter(kind="notification.read").count(), 1)
+
+    def test_notification_open_bridge_marks_read_then_uses_scoped_destination(self):
+        event = emit_event(
+            actor=self.admin,
+            kind="delivery.status_changed",
+            title="Update",
+            message="Private details",
+            recipients=[self.client_user],
+            delivery=self.delivery,
+        )
+        notification = Notification.objects.get(event=event)
+        self.client.force_login(self.client_user)
+        url = reverse("notification-open", args=[notification.pk])
+        bridge = self.client.get(url)
+        self.assertEqual(bridge.status_code, 200)
+        self.assertContains(bridge, "data-notification-open-bridge")
+        self.assertContains(bridge, "name=\"csrfmiddlewaretoken\"")
+        notification.refresh_from_db()
+        self.assertIsNone(notification.read_at)
+        response = self.client.post(url)
+        self.assertRedirects(response, reverse("delivery-detail", args=[self.delivery.pk]), fetch_redirect_response=False)
+        notification.refresh_from_db()
+        self.assertIsNotNone(notification.read_at)
+        self.assertEqual(DomainEvent.objects.filter(kind="notification.read").count(), 1)
+
+    def test_stale_or_foreign_notification_open_returns_to_own_notification_center(self):
+        event = emit_event(
+            actor=self.admin, kind="update", title="Update", message="Update", recipients=[self.other_client]
+        )
+        notification = Notification.objects.get(event=event)
+        self.client.force_login(self.client_user)
+        url = reverse("notification-open", args=[notification.pk])
+        response = self.client.get(url)
+        self.assertRedirects(response, "/client/notifications/", fetch_redirect_response=False)
+        notification.delete()
+        stale = self.client.get(url)
+        self.assertRedirects(stale, "/client/notifications/", fetch_redirect_response=False)
+
+    def test_read_only_system_notification_click_marks_read_then_returns_to_center(self):
+        event = emit_event(
+            actor=self.admin, kind="update", title="Update", message="Update", recipients=[self.client_user]
+        )
+        notification = Notification.objects.get(event=event)
+        self.client.force_login(self.client_user)
+        url = reverse("notification-open", args=[notification.pk])
+        bridge = self.client.get(url)
+        self.assertContains(bridge, "View notifications")
+        response = self.client.post(url)
+        self.assertRedirects(response, "/client/notifications/", fetch_redirect_response=False)
+        notification.refresh_from_db()
+        self.assertIsNotNone(notification.read_at)
+
+    def test_run_notification_destination_respects_admin_and_assigned_field_roles(self):
+        run = DeliveryRun.objects.create(
+            reference="TEST-RUN-1",
+            resource=self.resource,
+            operational_date=timezone.localdate(),
+            created_by=self.admin,
+        )
+        event = emit_event(
+            actor=self.admin,
+            kind="run.released",
+            title="Run ready",
+            message="A run is ready.",
+            recipients=[self.admin, self.rider],
+            payload={"run_id": str(run.pk)},
+        )
+        admin_notification = Notification.objects.get(event=event, recipient=self.admin)
+        rider_notification = Notification.objects.get(event=event, recipient=self.rider)
+        self.client.force_login(self.admin)
+        self.assertEqual(
+            self.client.post(reverse("notification-open", args=[admin_notification.pk])).headers["Location"],
+            reverse("run-detail", args=[run.pk]),
+        )
+        self.client.force_login(self.rider)
+        self.assertEqual(
+            self.client.post(reverse("notification-open", args=[rider_notification.pk])).headers["Location"],
+            reverse("field-dashboard"),
+        )
+
+    def test_delete_notification_is_post_scoped_and_keeps_events_and_delivery(self):
+        event = emit_event(
+            actor=self.admin,
+            kind="delivery.status_changed",
+            title="Update",
+            message="Update",
+            recipients=[self.client_user],
+            delivery=self.delivery,
+        )
+        notification = Notification.objects.get(event=event)
+        outbox = PushOutbox.objects.create(notification=notification)
+        self.client.force_login(self.other_client)
+        url = reverse("notification-delete", args=[notification.pk])
+        self.assertEqual(self.client.get(url).status_code, 405)
+        self.client.post(url)
+        self.assertTrue(Notification.objects.filter(pk=notification.pk).exists())
+        self.client.force_login(self.client_user)
+        self.assertEqual(self.client.post(url).status_code, 302)
+        self.assertFalse(Notification.objects.filter(pk=notification.pk).exists())
+        self.assertFalse(PushOutbox.objects.filter(pk=outbox.pk).exists())
+        self.assertTrue(DomainEvent.objects.filter(pk=event.pk).exists())
+        self.assertTrue(Delivery.objects.filter(pk=self.delivery.pk).exists())
+
+    def test_clear_all_deletes_only_recipient_notifications_and_shows_confirmation(self):
+        own_event = emit_event(
+            actor=self.admin, kind="one", title="One", message="One", recipients=[self.client_user]
+        )
+        emit_event(actor=self.admin, kind="two", title="Two", message="Two", recipients=[self.client_user])
+        other_event = emit_event(
+            actor=self.admin, kind="other", title="Other", message="Other", recipients=[self.other_client]
+        )
+        self.client.force_login(self.client_user)
+        page = self.client.get("/client/notifications/")
+        self.assertContains(page, "Clear All")
+        self.assertContains(page, "data-confirm=")
+        self.assertEqual(self.client.get(reverse("notifications-clear")).status_code, 405)
+        response = self.client.post(reverse("notifications-clear"))
+        self.assertRedirects(response, "/client/notifications/", fetch_redirect_response=False)
+        self.assertFalse(Notification.objects.filter(recipient=self.client_user).exists())
+        self.assertTrue(Notification.objects.filter(recipient=self.other_client).exists())
+        self.assertTrue(DomainEvent.objects.filter(pk=own_event.pk).exists())
+        self.assertTrue(DomainEvent.objects.filter(kind="other", pk=other_event.pk).exists())
+        self.assertEqual(self.client.get(reverse("notification-state")).json()["unread"], 0)
+
+    def test_notification_state_reports_server_authoritative_unread_count(self):
+        emit_event(
+            actor=self.admin, kind="one", title="One", message="One", recipients=[self.client_user]
+        )
+        emit_event(
+            actor=self.admin, kind="two", title="Two", message="Two", recipients=[self.client_user]
+        )
+        self.client.force_login(self.client_user)
+        self.assertEqual(self.client.get(reverse("notification-state")).json()["unread"], 2)
+
+    def test_notification_mutations_still_require_csrf(self):
+        event = emit_event(
+            actor=self.admin, kind="update", title="Update", message="Update", recipients=[self.client_user]
+        )
+        notification = Notification.objects.get(event=event)
+        csrf_client = Client(enforce_csrf_checks=True)
+        csrf_client.force_login(self.client_user)
+        self.assertEqual(csrf_client.post(reverse("notification-delete", args=[notification.pk])).status_code, 403)
+        self.assertEqual(csrf_client.post(reverse("notifications-clear")).status_code, 403)
+        self.assertTrue(Notification.objects.filter(pk=notification.pk).exists())
 
     def test_event_and_notifications_rollback_together(self):
         with self.assertRaises(RuntimeError):

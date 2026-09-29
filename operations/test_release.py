@@ -75,6 +75,19 @@ class V1ReleaseTests(TestCase):
             self.assertEqual(response["Location"], "/login/")
             self.assertIn(self.client.get(protected_url).status_code, (302, 403))
 
+    @override_settings(
+        WEB_PUSH_ENABLED=True,
+        VAPID_PUBLIC_KEY="public-vapid-test-value",
+        VAPID_PRIVATE_KEY="private-vapid-test-value",
+        VAPID_SUBJECT="mailto:ops@example.com",
+    )
+    def test_push_settings_expose_only_the_public_vapid_key(self):
+        self.client.force_login(self.client_user)
+        response = self.client.get("/client/settings/")
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "public-vapid-test-value")
+        self.assertNotContains(response, "private-vapid-test-value")
+
     def test_client_booking_hides_internal_area_and_zone_fields(self):
         self.client.force_login(self.client_user)
         response = self.client.get("/client/booking/")
@@ -173,6 +186,12 @@ class V1ReleaseTests(TestCase):
         self.assertIn("Design-Pot Logistics", seen["data"])
         self.assertNotIn("0240000000", seen["data"])
         self.assertNotIn("800", seen["data"])
+        push_payload = json.loads(seen["data"])
+        self.assertEqual(
+            push_payload["url"], reverse("notification-open", args=[notification.pk])
+        )
+        self.assertEqual(set(push_payload), {"title", "body", "url", "tag"})
+        self.assertNotIn("Private title", seen["data"])
         outbox.refresh_from_db()
         self.assertEqual(outbox.attempts, 1)
         self.assertIsNone(outbox.sent_at)

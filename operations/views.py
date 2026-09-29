@@ -16,7 +16,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from django.views.decorators.cache import never_cache
-from django.views.decorators.http import require_GET, require_POST
+from django.views.decorators.http import require_GET, require_http_methods, require_POST
 
 from .access import visible_deliveries
 from .forms import DeliveryFilterForm, SignInForm
@@ -31,6 +31,7 @@ from .models import (
     RunStop,
     User,
 )
+from .notification_destinations import notification_destination
 from .services import emit_event
 from .social_auth import google_oauth_configured
 
@@ -232,12 +233,19 @@ def page(request, portal, section):
         context["unread_count"] = Notification.objects.filter(
             recipient=request.user, read_at__isnull=True
         ).count()
-        context["page_obj"] = Paginator(
+        page_obj = Paginator(
             Notification.objects.filter(recipient=request.user)
             .select_related("event")
             .order_by("-created_at"),
             20,
         ).get_page(request.GET.get("page"))
+        for notification in page_obj:
+            setattr(
+                notification,
+                "actionable",
+                notification_destination(notification, request.user) is not None,
+            )
+        context["page_obj"] = page_obj
         return render(request, "operations/notifications.html", context)
     if section == "settings":
         context["vapid_public_key"] = settings.VAPID_PUBLIC_KEY
@@ -369,6 +377,64 @@ def read_notification(request, notification_id):
         else "field"
     )
     return redirect(f"/{prefix}/notifications/")
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def open_notification(request, notification_id):
+    """A GET bridge lets service-worker clicks submit the normal CSRF-protected POST."""
+    notification = (
+        Notification.objects.filter(pk=notification_id, recipient=request.user)
+        .select_related("event")
+        .first()
+    )
+    if notification is None:
+        return redirect(_notifications_url(request.user))
+    destination = notification_destination(notification, request.user)
+    if request.method == "GET":
+        return render(
+            request,
+            "operations/notification_open.html",
+            {
+                "title": "Opening notification",
+                "destination": destination,
+                "notification_id": notification_id,
+            },
+        )
+    with transaction.atomic():
+        notification = Notification.objects.select_for_update().filter(
+            pk=notification_id, recipient=request.user
+        ).first()
+        if notification is None:
+            return redirect(_notifications_url(request.user))
+        if not notification.read_at:
+            notification.read_at = timezone.now()
+            notification.save(update_fields=["read_at"])
+            DomainEvent.objects.create(
+                actor=request.user,
+                kind="notification.read",
+                payload={"notification_id": str(notification.pk)},
+            )
+    return redirect(destination or _notifications_url(request.user))
+
+
+def _notifications_url(user):
+    prefix = "admin" if user.role == "admin" else "client" if user.role == "client" else "field"
+    return f"/{prefix}/notifications/"
+
+
+@login_required
+@require_POST
+def delete_notification(request, notification_id):
+    Notification.objects.filter(pk=notification_id, recipient=request.user).delete()
+    return redirect(_notifications_url(request.user))
+
+
+@login_required
+@require_POST
+def clear_notifications(request):
+    Notification.objects.filter(recipient=request.user).delete()
+    return redirect(_notifications_url(request.user))
 
 
 @login_required

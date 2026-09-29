@@ -72,12 +72,17 @@ const notificationBell = document.querySelector('.notification-bell');
 const toast = document.querySelector('[data-notification-toast]');
 let notificationCursor = document.body.dataset.notificationCursor || '';
 function updateUnreadCount(count) {
-  if (!notificationBell) return;
-  notificationBell.dataset.unreadCount = String(count);
-  notificationBell.setAttribute('aria-label', count ? `Notifications, ${count} unread` : 'Notifications');
-  let badge = notificationBell.querySelector('.unread-count');
-  if (count && !badge) { badge = document.createElement('span'); badge.className = 'unread-count'; notificationBell.append(badge); }
-  if (badge) { badge.textContent = count > 99 ? '99+' : String(count); badge.hidden = !count; }
+  if (notificationBell) {
+    notificationBell.dataset.unreadCount = String(count);
+    notificationBell.setAttribute('aria-label', count ? `Notifications, ${count} unread` : 'Notifications');
+    let badge = notificationBell.querySelector('.unread-count');
+    if (count && !badge) { badge = document.createElement('span'); badge.className = 'unread-count'; notificationBell.append(badge); }
+    if (badge) { badge.textContent = count > 99 ? '99+' : String(count); badge.hidden = !count; }
+  }
+  try {
+    if (count > 0 && 'setAppBadge' in navigator) navigator.setAppBadge(count).catch(() => {});
+    else if (count === 0 && 'clearAppBadge' in navigator) navigator.clearAppBadge().catch(() => {});
+  } catch { /* Badging is optional and platform controlled. */ }
 }
 function playAlert() {
   if (localStorage.getItem('dpot-mute-alerts') === '1' || (navigator.userActivation && !navigator.userActivation.hasBeenActive)) return;
@@ -115,6 +120,7 @@ async function pollNotificationState() {
 }
 window.setInterval(pollNotificationState, 30000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) pollNotificationState(); });
+pollNotificationState();
 
 const csrfToken = () => document.querySelector('input[name="csrfmiddlewaretoken"]')?.value ||
   document.cookie.split('; ').find(value => value.startsWith('csrftoken='))?.split('=').slice(1).join('=') || '';
@@ -195,6 +201,8 @@ document.querySelectorAll('[data-logout]').forEach(form => form.addEventListener
   } catch { /* Logout must proceed even if device unsubscribe fails. */ }
   form.submit();
 }));
+
+document.querySelector('[data-notification-open-bridge]')?.requestSubmit();
 
 
 document.querySelectorAll('[data-mobile-filter]').forEach(panel => {

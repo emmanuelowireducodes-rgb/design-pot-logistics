@@ -30,7 +30,7 @@ COD is separate from delivery fees. The ledger stores collections, reconciliatio
 
 ## Events and notifications
 
-`emit_event` appends an immutable event and creates deduplicated in-app notifications in the same transaction. Read acknowledgements are recipient-scoped POSTs with CSRF protection and an audit event. No external message is sent. Future domain services resolve audiences (organization members, current assignee, dispatch) and call the same mechanism. A transactional outbox worker, retry policy and channel adapters must be added before SMS, push or WhatsApp; external API calls must never occur inside the database transaction.
+`emit_event` appends an immutable event, creates recipient-scoped in-app notifications and (when VAPID is configured) transactional Web Push outbox rows in the same transaction. Read and delete actions are recipient-scoped POSTs with CSRF protection; reads append audit events, while notification deletion leaves the append-only event and all operational records intact. The one-shot `send_web_push` command must be invoked by a recurring worker/scheduler; the Render Free Gunicorn service does not process it automatically. External calls never run inside the domain transaction.
 
 ## Integration seams
 

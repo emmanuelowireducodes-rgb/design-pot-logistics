@@ -1,1 +1,24 @@
-{% extends "base.html" %}{% block content %}<div class="page-heading"><div><div class="eyebrow">STAY IN THE LOOP</div><h1>Notifications.</h1><p class="muted">Updates for you, all in one place.</p></div>{% if unread_count %}<form method="post" action="{% url 'notifications-read-all' %}">{% csrf_token %}<button class="button secondary">Mark all as read</button></form>{% endif %}</div><section class="card">{% for item in page_obj %}<article id="notification-{{ item.id }}" class="notification-row {% if not item.read_at %}unread{% endif %}"><span class="notification-dot" aria-label="{% if item.read_at %}Read{% else %}Unread{% endif %}"></span><div><h2>{{ item.title }}</h2><p>{{ item.message }}</p><small class="muted">{{ item.created_at|date:"d M Y, H:i" }} GMT · {{ item.channel }}</small></div>{% if not item.read_at %}<form method="post" action="{% url 'notification-read' item.id %}">{% csrf_token %}<button class="button secondary">Mark read</button></form>{% else %}<span class="muted small-text">Read</span>{% endif %}</article>{% empty %}{% include "partials/empty.html" with empty_title="You're up to date" empty_description="New assignments and delivery updates will appear here." %}{% endfor %}{% include "partials/pagination.html" %}</section>{% endblock %}
+{% extends "base.html" %}
+{% block content %}
+<div class="page-heading">
+  <div><div class="eyebrow">STAY IN THE LOOP</div><h1>Notifications.</h1><p class="muted">Updates for you, all in one place.</p></div>
+  <div class="heading-actions">
+    {% if unread_count %}<form method="post" action="{% url 'notifications-read-all' %}">{% csrf_token %}<button class="button secondary">Mark all as read</button></form>{% endif %}
+    {% if page_obj.paginator.count %}<form method="post" action="{% url 'notifications-clear' %}" data-confirm="Permanently delete all your notifications? This cannot be undone.">{% csrf_token %}<button class="button secondary">Clear All</button></form>{% endif %}
+  </div>
+</div>
+<section class="card">
+  {% for item in page_obj %}
+  <article id="notification-{{ item.id }}" class="notification-row {% if not item.read_at %}unread{% endif %}">
+    <span class="notification-dot" aria-label="{% if item.read_at %}Read{% else %}Unread{% endif %}"></span>
+    <div><h2>{{ item.title }}</h2><p>{{ item.message }}</p><small class="muted">{{ item.created_at|date:"d M Y, H:i" }} GMT · {{ item.channel }}</small></div>
+    <div class="notification-actions">
+      {% if item.actionable %}<form method="post" action="{% url 'notification-open' item.id %}">{% csrf_token %}<button class="button primary">Open</button></form>{% endif %}
+      {% if not item.read_at %}<form method="post" action="{% url 'notification-read' item.id %}">{% csrf_token %}<button class="button secondary">Mark read</button></form>{% endif %}
+      <form method="post" action="{% url 'notification-delete' item.id %}">{% csrf_token %}<button class="button secondary">Delete</button></form>
+    </div>
+  </article>
+  {% empty %}{% include "partials/empty.html" with empty_title="You're up to date" empty_description="New assignments and delivery updates will appear here." %}{% endfor %}
+  {% include "partials/pagination.html" %}
+</section>
+{% endblock %}

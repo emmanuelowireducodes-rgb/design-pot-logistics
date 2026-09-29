@@ -30,27 +30,48 @@ self.addEventListener('fetch', event => {
 self.addEventListener('push', event => {
   let data = {};
   try { data = event.data ? event.data.json() : {}; } catch { data = {}; }
-  const url = new URL(typeof data.url === 'string' ? data.url : '/', self.location.origin);
-  const safeUrl = url.origin === self.location.origin && /^\/(admin|client|field)\//.test(url.pathname)
-    ? `${url.pathname}${url.search}${url.hash}` : '/';
-  event.waitUntil(self.registration.showNotification('Design-Pot Logistics', {
-    body: 'You have a new update. Open the app to view it.',
-    icon: ICON,
-    badge: ICON,
-    tag: typeof data.tag === 'string' ? data.tag.slice(0, 100) : 'design-pot-update',
-    data: {url: safeUrl},
-    renotify: false,
-  }));
+  let safeUrl = '/';
+  try {
+    const url = new URL(typeof data.url === 'string' ? data.url : '/', self.location.origin);
+    if (url.origin === self.location.origin && /^\/notifications\/[0-9a-f-]{36}\/open\/$/i.test(url.pathname) && !url.search && !url.hash) {
+      safeUrl = url.pathname;
+    }
+  } catch { /* Invalid notification navigation falls back to the app root. */ }
+  event.waitUntil(Promise.all([
+    syncUnreadBadge(),
+    self.registration.showNotification('Design-Pot Logistics', {
+      body: 'You have a new update. Open the app to view it.',
+      icon: ICON,
+      tag: typeof data.tag === 'string' ? data.tag.slice(0, 100) : 'design-pot-update',
+      data: {url: safeUrl},
+      renotify: false,
+    }),
+  ]));
 });
+
+async function syncUnreadBadge() {
+  try {
+    if (!('setAppBadge' in self.navigator) && !('clearAppBadge' in self.navigator)) return;
+    const response = await fetch('/notifications/state/', {credentials: 'include', cache: 'no-store'});
+    if (!response.ok || !response.headers.get('content-type')?.includes('application/json')) return;
+    const state = await response.json();
+    if (!Number.isSafeInteger(state.unread) || state.unread < 0) return;
+    if (state.unread > 0 && 'setAppBadge' in self.navigator) await self.navigator.setAppBadge(state.unread);
+    else if (state.unread === 0 && 'clearAppBadge' in self.navigator) await self.navigator.clearAppBadge();
+  } catch { /* Background badge refresh is best-effort and never blocks the alert. */ }
+}
+
 self.addEventListener('notificationclick', event => {
   event.notification.close();
-  const candidate = new URL(event.notification.data?.url || '/', self.location.origin);
-  const url = candidate.origin === self.location.origin && /^\/(admin|client|field)\//.test(candidate.pathname)
-    ? candidate.href : self.location.origin + '/';
+  let url = self.location.origin + '/';
+  try {
+    const candidate = new URL(event.notification.data?.url || '/', self.location.origin);
+    if (candidate.origin === self.location.origin && /^\/notifications\/[0-9a-f-]{36}\/open\/$/i.test(candidate.pathname) && !candidate.search && !candidate.hash) url = candidate.href;
+  } catch { /* Stale or malformed system notification uses the safe app root. */ }
   event.waitUntil(self.clients.matchAll({type: 'window', includeUncontrolled: true}).then(async clients => {
     const existing = clients.find(client => new URL(client.url).origin === self.location.origin);
     if (existing) {
-      await existing.navigate(url);
+      if (existing.navigate) await existing.navigate(url);
       return existing.focus();
     }
     return self.clients.openWindow(url);
