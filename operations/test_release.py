@@ -278,7 +278,11 @@ class V1ReleaseTests(TestCase):
             expected_revision=delivery.job.revision,
             request_key=uuid.uuid4(),
         )
+        resource.status = "off_duty"
+        resource.save(update_fields=["status"])
         confirm_quote(actor=self.client_user, quote_id=quote.pk)
+        resource.status = "available"
+        resource.save(update_fields=["status"])
         run = runs.create_run(
             actor=self.admin,
             resource_id=resource.pk,

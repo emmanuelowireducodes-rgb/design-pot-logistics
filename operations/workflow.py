@@ -1,13 +1,13 @@
 """Transactional Phase 2 operations. HTTP adapters never write operational state directly."""
 
 import uuid
-from datetime import timedelta
+from datetime import datetime, time, timedelta
 from decimal import Decimal
 
 from django.conf import settings
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
-from django.db.models import Max, Q, Sum
+from django.db.models import Max, Q, Subquery, Sum
 from django.utils import timezone
 
 from .booking_forms import BookingForm, CollectionForm
@@ -36,6 +36,7 @@ from .services import emit_event
 
 ACTIVE = ("assigned", "to_pickup", "picked_up", "in_transit")
 EXCEPTIONS = ("unreachable", "failed")
+WORKLOAD_STATUSES = (*ACTIVE, *EXCEPTIONS)
 NEXT_STATUS = {"assigned": "to_pickup", "to_pickup": "picked_up", "picked_up": "in_transit"}
 ACTION_LABELS = {
     "to_pickup": "Start pickup",
@@ -256,7 +257,7 @@ def confirm_quote(*, actor, quote_id):
         kind="quote.confirmed",
         delivery=delivery,
         title=f"{delivery.reference} confirmed",
-        message="Your delivery is confirmed and awaiting dispatch.",
+        message="Your delivery has been confirmed.",
         recipients=audiences(delivery),
         payload={
             "quote_id": str(quote.pk),
@@ -265,6 +266,7 @@ def confirm_quote(*, actor, quote_id):
             "job_id": str(job.pk),
         },
     )
+    auto_assign_confirmed_delivery(actor=actor, delivery=delivery)
     return confirmation
 
 
@@ -285,6 +287,40 @@ def assign_delivery(
     delivery = Delivery.objects.select_for_update().select_related("job").get(pk=delivery_id)
     if replay(actor, delivery, request_key, "delivery.assigned"):
         return latest_assignment(delivery)
+    return _assign_locked_delivery(
+        actor=actor,
+        delivery=delivery,
+        resource_id=resource_id,
+        starts_at=starts_at,
+        ends_at=ends_at,
+        conflict_start=starts_at,
+        conflict_end=ends_at,
+        request_key=request_key,
+        expected_assignment=expected_assignment,
+        override=override,
+        reason=reason,
+        assignment_source="manual",
+    )
+
+
+def _assign_locked_delivery(
+    *,
+    actor,
+    delivery,
+    resource_id,
+    starts_at,
+    ends_at,
+    conflict_start,
+    conflict_end,
+    request_key,
+    expected_assignment,
+    override,
+    reason,
+    assignment_source,
+    workload=None,
+    operational_date=None,
+):
+    """Shared assignment validation and writes; caller holds the Delivery lock."""
     if delivery.status not in ("confirmed", "assigned"):
         raise ValidationError(
             "Only confirmed or not-yet-started assigned deliveries can be dispatched."
@@ -299,11 +335,20 @@ def assign_delivery(
     previous = latest_assignment(delivery)
     if (previous.pk if previous else None) != expected_assignment:
         raise ValidationError("The assignment has changed. Reload before assigning.")
-    if ends_at <= starts_at or ends_at - starts_at > timedelta(days=7) or ends_at <= timezone.now():
+    if starts_at is None or ends_at is None:
+        if assignment_source != "automatic" or starts_at is not None or ends_at is not None:
+            raise ValidationError("Choose a current or future reservation of up to seven days.")
+    elif (
+        ends_at <= starts_at
+        or ends_at - starts_at > timedelta(days=7)
+        or ends_at <= timezone.now()
+    ):
         raise ValidationError("Choose a current or future reservation of up to seven days.")
     if delivery.service == "premium" and (
         not delivery.window_start
         or not delivery.window_end
+        or starts_at is None
+        or ends_at is None
         or starts_at > delivery.window_start
         or ends_at < delivery.window_end
     ):
@@ -312,26 +357,43 @@ def assign_delivery(
     ids = {resource_id}
     if previous:
         ids.add(previous.resource_id)
-    locked = list(Resource.objects.select_for_update().filter(pk__in=ids).order_by("pk"))
+    locked = list(
+        Resource.objects.select_for_update(of=("self",)).filter(pk__in=ids).order_by("pk")
+    )
     resource = next((person for person in locked if person.pk == resource_id), None)
     if not resource or not resource.user.is_active:
         raise ValidationError("This resource is not available for assignment.")
     expected_role = "rider" if delivery.vehicle_type == "bike" else "driver"
-    if resource.vehicle_type != delivery.vehicle_type or resource.user.role != expected_role:
+    if (
+        resource.vehicle_type != delivery.vehicle_type
+        or resource.user.role != expected_role
+        or (assignment_source == "automatic" and not resource.user.operational_access_approved)
+    ):
         raise ValidationError("Choose a person with the required vehicle and role.")
+    if assignment_source == "automatic" and resource.status != "available":
+        raise ValidationError("This resource is not available for assignment.")
     conflicts = Availability.objects.filter(
-        resource=resource, cancelled_at__isnull=True, starts_at__lt=ends_at, ends_at__gt=starts_at
+        resource=resource,
+        cancelled_at__isnull=True,
+        starts_at__lt=conflict_end,
+        ends_at__gt=conflict_start,
     ).exclude(delivery=delivery)
     conflict_ids = list(conflicts.values_list("pk", flat=True))
     if override and not reason.strip():
         raise ValidationError("An explicit reason is required for an override.")
-    if (conflict_ids or resource.status == "off_duty") and not override:
+    status_conflict = (
+        resource.status != "available"
+        if assignment_source == "automatic"
+        else resource.status == "off_duty"
+    )
+    if (conflict_ids or status_conflict) and not override:
         raise ValidationError(
             "This person is off duty or has overlapping work. Choose another time/person, or explicitly override with a reason."
         )
-    Availability.objects.filter(
-        delivery=delivery, kind="booking", cancelled_at__isnull=True
-    ).update(cancelled_at=timezone.now(), release_reason="reassigned")
+    if assignment_source == "manual":
+        Availability.objects.filter(
+            delivery=delivery, kind="booking", cancelled_at__isnull=True
+        ).update(cancelled_at=timezone.now(), release_reason="reassigned")
     assignment = Assignment.objects.create(
         delivery=delivery,
         resource=resource,
@@ -343,21 +405,27 @@ def assign_delivery(
             "name": resource.user.get_full_name() or resource.user.username,
             "vehicle": resource.vehicle_name,
             "registration": resource.registration,
+            "assignment_source": assignment_source,
         },
     )
-    Availability.objects.create(
-        resource=resource,
-        delivery=delivery,
-        kind="booking",
-        starts_at=starts_at,
-        ends_at=ends_at,
-        note=f"Assignment {assignment.pk}",
-    )
+    if starts_at is not None and ends_at is not None:
+        Availability.objects.create(
+            resource=resource,
+            delivery=delivery,
+            kind="booking",
+            starts_at=starts_at,
+            ends_at=ends_at,
+            note=f"Assignment {assignment.pk}",
+        )
     record_status(
         delivery,
         actor,
         "assigned",
-        "Assignment changed." if previous else "Rider / driver assigned.",
+        "Automatically assigned after quote confirmation."
+        if assignment_source == "automatic"
+        else "Assignment changed."
+        if previous
+        else "Rider / driver assigned.",
     )
     recipients = audiences(delivery) + [resource.user]
     if previous and previous.resource_id != resource.pk:
@@ -373,12 +441,220 @@ def assign_delivery(
         payload={
             "assignment_id": assignment.pk,
             "previous_assignment_id": previous.pk if previous else None,
+            "resource_id": str(resource.pk),
+            "resource_name": resource.user.get_full_name() or resource.user.username,
+            "assignment_source": assignment_source,
             "override": override,
             "reason": reason.strip() if override else "",
             "conflicting_blocks": [str(pk) for pk in conflict_ids],
+            **({"resource_workload": workload} if workload is not None else {}),
+            **(
+                {"operational_date": operational_date.isoformat()}
+                if operational_date is not None
+                else {}
+            ),
+            **(
+                {
+                    "window_start": delivery.window_start.isoformat(),
+                    "window_end": delivery.window_end.isoformat(),
+                }
+                if assignment_source == "automatic" and delivery.service == "premium"
+                else {}
+            ),
         },
     )
     return assignment
+
+
+def _automatic_assignment_period(delivery):
+    if delivery.service == "premium":
+        if not delivery.window_start or not delivery.window_end:
+            raise ValidationError("Premium deliveries need a saved delivery window.")
+        last_day = delivery.window_end.date()
+        if delivery.window_end.time() == time.min:
+            last_day -= timedelta(days=1)
+        return delivery.window_start, delivery.window_end, delivery.window_start.date(), last_day
+
+    operational_date = timezone.localdate()
+    start = timezone.now()
+    end = timezone.make_aware(
+        datetime.combine(operational_date + timedelta(days=1), time.min)
+    )
+    return start, end, operational_date, operational_date
+
+
+def _active_run_stops_for_period(resource_ids, first_day, last_day):
+    return RunStop.objects.filter(
+        run__resource_id__in=resource_ids,
+        run__operational_date__gte=first_day,
+        run__operational_date__lte=last_day,
+        run__status__in=[
+            DeliveryRun.Status.DRAFT,
+            DeliveryRun.Status.READY,
+            DeliveryRun.Status.IN_PROGRESS,
+        ],
+    ).exclude(status__in=[RunStop.Status.REMOVED, RunStop.Status.COMPLETED])
+
+
+@transaction.atomic
+def auto_assign_confirmed_delivery(*, actor, delivery):
+    """Try an automatic assignment while confirmation still holds the Delivery lock."""
+    if delivery.status != "confirmed" or latest_assignment(delivery):
+        return None
+
+    # A stale booking record needs Admin review; auto-assignment never edits existing blocks.
+    if Availability.objects.filter(
+        delivery=delivery, kind="booking", cancelled_at__isnull=True
+    ).exists():
+        _record_auto_assignment_unavailable(actor, delivery, timezone.localdate())
+        return None
+
+    period_start, period_end, first_day, last_day = _automatic_assignment_period(delivery)
+    if delivery.service == "premium" and period_end - period_start > timedelta(days=7):
+        _record_auto_assignment_unavailable(actor, delivery, first_day)
+        return None
+    expected_role = User.Role.RIDER if delivery.vehicle_type == "bike" else User.Role.DRIVER
+
+    # Lock Resource rows only; the joined User fields are re-read and locked below.
+    resources = list(
+        Resource.objects.filter(
+            vehicle_type=delivery.vehicle_type,
+            status="available",
+            user__is_active=True,
+            user__role=expected_role,
+            user__operational_access_approved=True,
+        )
+        .order_by("pk")
+        .select_for_update(of=("self",))
+    )
+    if not resources:
+        _record_auto_assignment_unavailable(actor, delivery, first_day)
+        return None
+
+    users = {
+        user.pk: user
+        for user in User.objects.select_for_update().filter(
+            pk__in=[resource.user_id for resource in resources]
+        ).order_by("pk")
+    }
+    resources = [
+        resource
+        for resource in resources
+        if (user := users.get(resource.user_id))
+        and user.is_active
+        and user.operational_access_approved
+        and user.role == expected_role
+        and resource.status == "available"
+    ]
+    resource_ids = [resource.pk for resource in resources]
+    if not resource_ids:
+        _record_auto_assignment_unavailable(actor, delivery, first_day)
+        return None
+
+    conflicting_resources = set(
+        Availability.objects.filter(
+            resource_id__in=resource_ids,
+            cancelled_at__isnull=True,
+            starts_at__lt=period_end,
+            ends_at__gt=period_start,
+        )
+        .exclude(delivery=delivery)
+        .values_list("resource_id", flat=True)
+    )
+    conflicting_resources.update(
+        _active_run_stops_for_period(resource_ids, first_day, last_day).values_list(
+            "run__resource_id", flat=True
+        )
+    )
+    resources = [resource for resource in resources if resource.pk not in conflicting_resources]
+    if not resources:
+        _record_auto_assignment_unavailable(actor, delivery, first_day)
+        return None
+
+    eligible_ids = [resource.pk for resource in resources]
+    workloads: dict[uuid.UUID, set[uuid.UUID]] = {
+        resource_id: set() for resource_id in eligible_ids
+    }
+    latest_assignment_ids = (
+        Assignment.objects.filter(delivery__status__in=WORKLOAD_STATUSES)
+        .order_by()
+        .values("delivery_id")
+        .annotate(latest_id=Max("pk"))
+        .values("latest_id")
+    )
+    active_assignments = Assignment.objects.filter(
+        pk__in=Subquery(latest_assignment_ids), resource_id__in=eligible_ids
+    ).values_list("delivery_id", "resource_id")
+    for delivery_id, resource_id in active_assignments:
+        workloads[resource_id].add(delivery_id)
+
+    active_run_stops = _active_run_stops_for_period(eligible_ids, first_day, last_day).filter(
+        delivery__status__in=WORKLOAD_STATUSES
+    ).values_list("delivery_id", "run__resource_id")
+    for delivery_id, resource_id in active_run_stops:
+        workloads[resource_id].add(delivery_id)
+
+    last_assignments: dict[uuid.UUID, datetime | None] = dict(
+        Assignment.objects.filter(resource_id__in=eligible_ids)
+        .order_by()
+        .values("resource_id")
+        .annotate(last_assigned_at=Max("created_at"))
+        .values_list("resource_id", "last_assigned_at")
+    )
+    chosen = min(
+        resources,
+        key=lambda resource: (
+            len(workloads[resource.pk]),
+            _last_assignment_timestamp(last_assignments.get(resource.pk)),
+            str(resource.pk),
+        ),
+    )
+
+    premium = delivery.service == "premium"
+    assignment_start = delivery.window_start if premium else None
+    assignment_end = delivery.window_end if premium else None
+    request_key = uuid.uuid5(uuid.NAMESPACE_URL, f"designpot:auto-assignment:{delivery.pk}")
+    return _assign_locked_delivery(
+        actor=actor,
+        delivery=delivery,
+        resource_id=chosen.pk,
+        starts_at=assignment_start,
+        ends_at=assignment_end,
+        conflict_start=period_start,
+        conflict_end=period_end,
+        request_key=request_key,
+        expected_assignment=None,
+        override=False,
+        reason="",
+        assignment_source="automatic",
+        workload=len(workloads[chosen.pk]),
+        operational_date=first_day,
+    )
+
+
+def _last_assignment_timestamp(value: datetime | None) -> float:
+    return value.timestamp() if value else float("-inf")
+
+
+def _record_auto_assignment_unavailable(actor, delivery, operational_date):
+    period_payload = {"operational_date": operational_date.isoformat()}
+    if delivery.service == "premium" and delivery.window_start and delivery.window_end:
+        period_payload = {
+            "window_start": delivery.window_start.isoformat(),
+            "window_end": delivery.window_end.isoformat(),
+        }
+    emit_event(
+        actor=actor,
+        kind="delivery.auto_assignment_unavailable",
+        delivery=delivery,
+        title=f"{delivery.reference} needs manual assignment",
+        message="No eligible On Duty resource was available. Manual Admin assignment is required.",
+        recipients=list(User.objects.filter(role=User.Role.ADMIN, is_active=True)),
+        request_key=uuid.uuid5(
+            uuid.NAMESPACE_URL, f"designpot:auto-assignment-unavailable:{delivery.pk}"
+        ),
+        payload={"assignment_source": "automatic", **period_payload},
+    )
 
 
 @transaction.atomic

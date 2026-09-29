@@ -114,6 +114,16 @@ class Foundation25Tests(TestCase):
         with patch("operations.maps.RoadDistance.road_kilometres", return_value=Decimal("10")):
             return self.draft(**data)
 
+    def confirm_without_auto_assignment(self, quote_id):
+        # These tests cover location/pricing behavior and leave dispatch to their own steps.
+        statuses = dict(Resource.objects.values_list("pk", "status"))
+        Resource.objects.filter(status="available").update(status="off_duty")
+        try:
+            return workflow.confirm_quote(actor=self.customer, quote_id=quote_id)
+        finally:
+            for resource_id, status in statuses.items():
+                Resource.objects.filter(pk=resource_id).update(status=status)
+
     def card(self, client=False):
         return price_cards.save_card(
             actor=self.admin,
@@ -213,7 +223,7 @@ class Foundation25Tests(TestCase):
     def test_zone_correction_is_append_only_and_audited(self):
         delivery = self.resolved()
         old_id = delivery.pickup_id
-        workflow.confirm_quote(actor=self.customer, quote_id=delivery.job.current_quote_id)
+        self.confirm_without_auto_assignment(delivery.job.current_quote_id)
         quote_id = delivery.job.current_quote_id
         locations.assign_zone(
             actor=self.admin,
@@ -442,7 +452,7 @@ class Foundation25Tests(TestCase):
         delivery = self.resolved()
         quote = delivery.job.current_quote
         original = dict(quote.breakdown)
-        workflow.confirm_quote(actor=self.customer, quote_id=quote.pk)
+        self.confirm_without_auto_assignment(quote.pk)
         self.rate(card, rate_key=rate.rate_key, expected_version=1, amount=Decimal("95"))
         self.mode("DISTANCE_BASED")
         quote.refresh_from_db()
@@ -480,7 +490,7 @@ class Foundation25Tests(TestCase):
         self.assertEqual(quote.pk, again.pk)
         self.assertEqual(quote.source, "ADMIN_MANUAL_QUOTE")
         self.assertEqual(quote.breakdown["admin_actor"], self.admin.pk)
-        workflow.confirm_quote(actor=self.customer, quote_id=quote.pk)
+        self.confirm_without_auto_assignment(quote.pk)
         with self.assertRaises(ValidationError):
             pricing.manual_quote(
                 actor=self.admin,
@@ -668,7 +678,10 @@ class Foundation25Tests(TestCase):
             self.client.post(reverse("quote-review", args=[quote.pk])).status_code, 302
         )
         delivery.refresh_from_db()
-        self.assertEqual(delivery.status, "confirmed")
+        self.assertEqual(delivery.status, "assigned")
+        self.assertEqual(
+            delivery.assignments.order_by("-pk").first().resource.vehicle_type, "bike"
+        )
 
     def test_manual_booking_has_no_google_api_runtime_or_billing_requirement(self):
         self.client.force_login(self.customer)
@@ -694,7 +707,7 @@ class Foundation25Tests(TestCase):
             pickup_landmark="Blue pharmacy",
             pickup_instructions="Call at the gate",
         )
-        workflow.confirm_quote(actor=self.customer, quote_id=delivery.job.current_quote_id)
+        self.confirm_without_auto_assignment(delivery.job.current_quote_id)
         start = timezone.now() + timedelta(minutes=1)
         workflow.assign_delivery(
             actor=self.admin,
@@ -716,9 +729,7 @@ class Foundation25Tests(TestCase):
             destination_zone=self.destination.pk,
             pickup_address="No link pickup",
         )
-        workflow.confirm_quote(
-            actor=self.customer, quote_id=no_link_delivery.job.current_quote_id
-        )
+        self.confirm_without_auto_assignment(no_link_delivery.job.current_quote_id)
         later = start + timedelta(hours=2)
         workflow.assign_delivery(
             actor=self.admin,

@@ -73,7 +73,13 @@ class DeliveryRunTests(TestCase):
             "window_end": window_end.strftime("%Y-%m-%dT%H:%M") if service == "premium" else "",
             "payment_method": payment, "cod_amount": "25.00" if payment == "cod" else "0",
         })
-        workflow.confirm_quote(actor=self.client_user, quote_id=delivery.job.current_quote_id)
+        statuses = dict(Resource.objects.values_list("pk", "status"))
+        Resource.objects.filter(status="available").update(status="off_duty")
+        try:
+            workflow.confirm_quote(actor=self.client_user, quote_id=delivery.job.current_quote_id)
+        finally:
+            for resource_id, status in statuses.items():
+                Resource.objects.filter(pk=resource_id).update(status=status)
         delivery.refresh_from_db()
         return delivery
 

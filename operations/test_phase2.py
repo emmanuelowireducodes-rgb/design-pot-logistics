@@ -6,7 +6,7 @@ from unittest.mock import patch
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import DatabaseError, connection, transaction
-from django.test import Client, TestCase, override_settings
+from django.test import Client, TestCase, override_settings, skipUnlessDBFeature
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils import timezone
@@ -113,6 +113,22 @@ class Phase2Tests(TestCase):
         return workflow.save_booking(actor=self.customer, data=self.booking_data(**overrides))
 
     def confirmed(self, **overrides):
+        delivery = self.draft(**overrides)
+        self.confirm_without_auto_assignment(delivery)
+        delivery.refresh_from_db()
+        return delivery
+
+    def confirm_without_auto_assignment(self, delivery):
+        # These tests exercise manual dispatch; preserve duty state while suppressing auto-assign.
+        statuses = dict(Resource.objects.values_list("pk", "status"))
+        Resource.objects.filter(status="available").update(status="off_duty")
+        try:
+            workflow.confirm_quote(actor=self.customer, quote_id=delivery.job.current_quote_id)
+        finally:
+            for resource_id, status in statuses.items():
+                Resource.objects.filter(pk=resource_id).update(status=status)
+
+    def auto_confirmed(self, **overrides):
         delivery = self.draft(**overrides)
         workflow.confirm_quote(actor=self.customer, quote_id=delivery.job.current_quote_id)
         delivery.refresh_from_db()
@@ -239,6 +255,10 @@ class Phase2Tests(TestCase):
         self.assertRegex(delivery.reference, r"^DPT-\d{6}-\d{4}$")
         self.assertEqual(QuoteConfirmation.objects.count(), 1)
         event = DomainEvent.objects.get(kind="quote.confirmed")
+        self.assertEqual(Assignment.objects.filter(delivery=delivery).count(), 1)
+        self.assertEqual(
+            DomainEvent.objects.filter(delivery=delivery, kind="delivery.assigned").count(), 1
+        )
         self.assertSetEqual(
             set(Notification.objects.filter(event=event).values_list("recipient_id", flat=True)),
             {self.admin.pk, self.customer.pk},
@@ -246,6 +266,235 @@ class Phase2Tests(TestCase):
         self.assertEqual(first.quote_id, quote_id)
         second = self.confirmed()
         self.assertNotEqual(second.reference, delivery.reference or "")
+
+    def test_confirmation_automatically_assigns_standard_without_inventing_a_time(self):
+        delivery = self.auto_confirmed()
+        assignment = delivery.assignments.get()
+        self.assertEqual(delivery.status, Delivery.Status.ASSIGNED)
+        self.assertEqual(assignment.resource_id, min(self.bike.pk, self.second_bike.pk, key=str))
+        self.assertIsNone(assignment.starts_at)
+        self.assertIsNone(assignment.ends_at)
+        self.assertFalse(Availability.objects.filter(delivery=delivery).exists())
+        event = DomainEvent.objects.get(delivery=delivery, kind="delivery.assigned")
+        self.assertEqual(event.payload["assignment_source"], "automatic")
+        self.assertEqual(event.payload["resource_id"], str(assignment.resource_id))
+        self.assertEqual(event.payload["resource_workload"], 0)
+        self.assertEqual(event.payload["operational_date"], timezone.localdate().isoformat())
+        self.assertEqual(
+            set(Notification.objects.filter(event=event).values_list("recipient_id", flat=True)),
+            {self.admin.pk, self.customer.pk, assignment.resource.user_id},
+        )
+        self.client.force_login(self.admin)
+        self.assertContains(
+            self.client.get(reverse("delivery-detail", args=[delivery.pk])),
+            "Automatically assigned to",
+        )
+        self.client.force_login(self.customer)
+        client_detail = self.client.get(reverse("delivery-detail", args=[delivery.pk]))
+        self.assertNotContains(client_detail, "resource_workload")
+        self.assertNotContains(client_detail, "Automatically assigned to")
+
+    def test_automatic_assignment_skips_off_duty_and_unapproved_resources(self):
+        self.bike.status = "off_duty"
+        self.bike.save(update_fields=["status"])
+        delivery = self.auto_confirmed()
+        self.assertEqual(delivery.assignments.get().resource_id, self.second_bike.pk)
+
+        self.second_bike.user.operational_access_approved = False
+        self.second_bike.user.save(update_fields=["operational_access_approved"])
+        delivery = self.auto_confirmed()
+        self.assertEqual(delivery.status, Delivery.Status.CONFIRMED)
+        self.assertFalse(delivery.assignments.exists())
+        self.assertTrue(
+            DomainEvent.objects.filter(
+                delivery=delivery, kind="delivery.auto_assignment_unavailable"
+            ).exists()
+        )
+
+    def test_inactive_and_vehicle_incompatible_resources_are_excluded(self):
+        self.rider.is_active = False
+        self.rider.save(update_fields=["is_active"])
+        self.second_bike.status = "off_duty"
+        self.second_bike.save(update_fields=["status"])
+        delivery = self.auto_confirmed()
+        self.assertEqual(delivery.status, Delivery.Status.CONFIRMED)
+        self.assertFalse(delivery.assignments.exists())
+
+        self.rider.is_active = True
+        self.rider.save(update_fields=["is_active"])
+        self.second_bike.status = "available"
+        self.second_bike.save(update_fields=["status"])
+        delivery = self.auto_confirmed(vehicle_type="car")
+        self.assertEqual(delivery.assignments.get().resource_id, self.car.pk)
+
+    def test_block_availability_and_expired_blocks_use_the_relevant_period(self):
+        now = timezone.now()
+        block = Availability.objects.create(
+            resource=self.bike,
+            kind="break",
+            starts_at=now + timedelta(minutes=15),
+            ends_at=now + timedelta(hours=2),
+        )
+        delivery = self.auto_confirmed()
+        self.assertEqual(delivery.assignments.get().resource_id, self.second_bike.pk)
+        block.refresh_from_db()
+        self.assertIsNone(block.cancelled_at)
+
+        expired = Availability.objects.create(
+            resource=self.second_bike,
+            kind="break",
+            starts_at=now - timedelta(hours=2),
+            ends_at=now - timedelta(minutes=1),
+        )
+        delivery = self.auto_confirmed()
+        self.assertEqual(delivery.assignments.get().resource_id, self.second_bike.pk)
+        expired.refresh_from_db()
+        self.assertIsNone(expired.cancelled_at)
+
+    def test_premium_uses_exact_window_and_standard_respects_same_day_run(self):
+        slot_start = timezone.now() + timedelta(days=1)
+        slot_start = slot_start.replace(hour=12, minute=0, second=0, microsecond=0)
+        slot_end = slot_start + timedelta(hours=1)
+        Availability.objects.create(
+            resource=self.bike,
+            kind="break",
+            starts_at=slot_start - timedelta(hours=2),
+            ends_at=slot_start - timedelta(hours=1),
+        )
+        self.second_bike.status = "off_duty"
+        self.second_bike.save(update_fields=["status"])
+        delivery = self.auto_confirmed(
+            service="premium",
+            window_start=timezone.localtime(slot_start).strftime("%Y-%m-%dT%H:%M"),
+            window_end=timezone.localtime(slot_end).strftime("%Y-%m-%dT%H:%M"),
+        )
+        assignment = delivery.assignments.get()
+        self.assertEqual(assignment.resource_id, self.bike.pk)
+        self.assertEqual(assignment.starts_at, delivery.window_start)
+        self.assertEqual(assignment.ends_at, delivery.window_end)
+
+        self.second_bike.status = "available"
+        self.second_bike.save(update_fields=["status"])
+        source = self.confirmed()
+        from . import runs
+
+        runs.create_run(
+            actor=self.admin,
+            resource_id=self.bike.pk,
+            operational_date=timezone.localdate(),
+            delivery_ids=[source.pk],
+            request_key=uuid.uuid4(),
+        )
+        standard = self.auto_confirmed()
+        self.assertEqual(standard.assignments.get().resource_id, self.second_bike.pk)
+
+    def test_premium_block_overlapping_saved_window_excludes_resource(self):
+        slot_start = timezone.now() + timedelta(days=1)
+        slot_start = slot_start.replace(hour=14, minute=0, second=0, microsecond=0)
+        slot_end = slot_start + timedelta(hours=1)
+        Availability.objects.create(
+            resource=self.bike,
+            kind="personal",
+            starts_at=slot_start + timedelta(minutes=15),
+            ends_at=slot_start + timedelta(minutes=30),
+        )
+        delivery = self.auto_confirmed(
+            service="premium",
+            window_start=timezone.localtime(slot_start).strftime("%Y-%m-%dT%H:%M"),
+            window_end=timezone.localtime(slot_end).strftime("%Y-%m-%dT%H:%M"),
+        )
+        self.assertEqual(delivery.assignments.get().resource_id, self.second_bike.pk)
+
+    def test_workload_ignores_terminal_deliveries_and_uses_stable_tie_breaks(self):
+        self.second_bike.status = "off_duty"
+        self.second_bike.save(update_fields=["status"])
+        first = self.auto_confirmed()
+        second = self.auto_confirmed()
+        self.assertEqual(first.assignments.get().resource_id, self.bike.pk)
+        self.assertEqual(second.assignments.get().resource_id, self.bike.pk)
+
+        self.second_bike.status = "available"
+        self.second_bike.save(update_fields=["status"])
+        third = self.auto_confirmed()
+        self.assertEqual(third.assignments.get().resource_id, self.second_bike.pk)
+        Delivery.objects.filter(pk=first.pk).update(status=Delivery.Status.DELIVERED)
+        fourth = self.auto_confirmed()
+        self.assertEqual(fourth.assignments.get().resource_id, self.bike.pk)
+
+    def test_tie_prefers_longest_since_assignment_then_resource_primary_key(self):
+        old_delivery = self.confirmed()
+        recent_delivery = self.confirmed()
+        Assignment.objects.create(
+            delivery=old_delivery,
+            resource=self.bike,
+            actor=self.admin,
+            created_at=timezone.now() - timedelta(days=2),
+        )
+        Assignment.objects.create(
+            delivery=recent_delivery,
+            resource=self.second_bike,
+            actor=self.admin,
+            created_at=timezone.now() - timedelta(days=1),
+        )
+        Delivery.objects.filter(pk__in=[old_delivery.pk, recent_delivery.pk]).update(
+            status=Delivery.Status.DELIVERED
+        )
+        delivery = self.auto_confirmed()
+        self.assertEqual(delivery.assignments.order_by("-pk").first().resource_id, self.bike.pk)
+
+        self.bike.status = "off_duty"
+        self.bike.save(update_fields=["status"])
+        self.second_bike.status = "off_duty"
+        self.second_bike.save(update_fields=["status"])
+        unassigned = self.auto_confirmed()
+        self.assertEqual(unassigned.status, Delivery.Status.CONFIRMED)
+        self.assertFalse(unassigned.assignments.exists())
+        self.assertTrue(
+            Notification.objects.filter(
+                recipient=self.admin,
+                event__delivery=unassigned,
+                event__kind="delivery.auto_assignment_unavailable",
+            ).exists()
+        )
+
+    def test_admin_can_reassign_auto_assigned_delivery_and_client_cannot_choose_resource(self):
+        delivery = self.auto_confirmed()
+        original = delivery.assignments.get()
+        replacement = self.second_bike if original.resource_id == self.bike.pk else self.bike
+        start = timezone.now() + timedelta(hours=3)
+        changed = workflow.assign_delivery(
+            actor=self.admin,
+            delivery_id=delivery.pk,
+            resource_id=replacement.pk,
+            starts_at=start,
+            ends_at=start + timedelta(hours=1),
+            request_key=uuid.uuid4(),
+            expected_assignment=original.pk,
+        )
+        self.assertEqual(changed.resource_id, replacement.pk)
+
+        fresh = self.draft()
+        self.client.force_login(self.customer)
+        response = self.client.post(
+            reverse("quote-review", args=[fresh.job.current_quote_id]),
+            {"resource_id": str(self.car.pk)},
+        )
+        self.assertEqual(response.status_code, 302)
+        fresh.refresh_from_db()
+        self.assertEqual(fresh.assignments.get().resource.vehicle_type, "bike")
+
+    @skipUnlessDBFeature("has_select_for_update")
+    def test_automatic_candidate_lock_targets_only_resource_rows(self):
+        delivery = self.draft()
+        with CaptureQueriesContext(connection) as queries:
+            workflow.confirm_quote(actor=self.customer, quote_id=delivery.job.current_quote_id)
+        lock_sql = next(
+            query["sql"]
+            for query in queries
+            if 'FROM "operations_resource"' in query["sql"]
+            and "FOR UPDATE" in query["sql"]
+        )
+        self.assertIn('FOR UPDATE OF "operations_resource"', lock_sql)
 
     def test_pricing_changes_do_not_change_accepted_quote(self):
         delivery = self.confirmed()
@@ -469,7 +718,7 @@ class Phase2Tests(TestCase):
         self.assertEqual(
             self.client.get("/admin/deliveries/").context["page_obj"].paginator.count, 0
         )
-        workflow.confirm_quote(actor=self.customer, quote_id=delivery.job.current_quote_id)
+        self.confirm_without_auto_assignment(delivery)
         self.assign(delivery, override=True, reason="PRIVATE operational reason")
         self.client.force_login(self.customer)
         page = self.client.get(reverse("delivery-detail", args=[delivery.pk]))
@@ -509,11 +758,13 @@ class Phase2Tests(TestCase):
         self.assertContains(self.client.get(quote_url), "Development quote")
         self.assertEqual(self.client.post(quote_url).status_code, 302)
         delivery.refresh_from_db()
-        self.assertEqual(delivery.status, "confirmed")
+        self.assertEqual(delivery.status, "assigned")
         self.client.force_login(self.admin)
         self.assertContains(
-            self.client.get("/admin/deliveries/?status=unassigned"), delivery.reference or ""
+            self.client.get("/admin/deliveries/?status=assigned"), delivery.reference or ""
         )
+        current_assignment = delivery.assignments.order_by("-pk").first()
+        assert current_assignment is not None
         start = timezone.now() + timedelta(minutes=5)
         response = self.client.post(
             reverse("assign-delivery", args=[delivery.pk]),
@@ -522,7 +773,7 @@ class Phase2Tests(TestCase):
                 "resource": self.bike.pk,
                 "starts_at": start.isoformat(),
                 "ends_at": (start + timedelta(hours=1)).isoformat(),
-                "expected_assignment": "",
+                "expected_assignment": current_assignment.pk,
             },
         )
         self.assertEqual(response.status_code, 302)
@@ -573,6 +824,7 @@ class Phase2Tests(TestCase):
             [
                 "requested",
                 "confirmed",
+                "assigned",
                 "assigned",
                 "to_pickup",
                 "picked_up",
