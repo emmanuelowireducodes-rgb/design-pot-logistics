@@ -2,7 +2,7 @@
 from allauth.core.exceptions import ImmediateHttpResponse
 from allauth.socialaccount.adapter import DefaultSocialAccountAdapter
 from django.contrib.auth.models import AbstractBaseUser
-from django.http import HttpResponseForbidden
+from django.shortcuts import render
 
 
 def google_oauth_configured():
@@ -25,5 +25,9 @@ class DesignPotSocialAccountAdapter(DefaultSocialAccountAdapter):
         user: AbstractBaseUser = sociallogin.user
         if sociallogin.is_existing and not user.is_active:
             raise ImmediateHttpResponse(
-                HttpResponseForbidden("This Design-Pot account is inactive. Contact an administrator.")
+                render(
+                    request,
+                    "registration/signin_unavailable.html",
+                    status=403,
+                )
             )

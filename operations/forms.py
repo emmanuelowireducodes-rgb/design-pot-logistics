@@ -4,17 +4,26 @@ from django.contrib.auth.forms import AuthenticationForm
 
 class SignInForm(AuthenticationForm):
     username = forms.CharField(
-        label="Username",
+        label="Username or email",
         max_length=150,
         widget=forms.TextInput(
-            attrs={"autocomplete": "username", "autofocus": True, "placeholder": "Your username"}
+            attrs={
+                "autocomplete": "username",
+                "autofocus": True,
+                "placeholder": "Username or email",
+                "aria-describedby": "id_username_errors",
+            }
         ),
     )
     password = forms.CharField(
         label="Password",
         strip=False,
         widget=forms.PasswordInput(
-            attrs={"autocomplete": "current-password", "placeholder": "Your password"}
+            attrs={
+                "autocomplete": "current-password",
+                "placeholder": "Your password",
+                "aria-describedby": "id_password_errors",
+            }
         ),
     )
 

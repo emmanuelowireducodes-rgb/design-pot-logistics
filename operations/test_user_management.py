@@ -1,6 +1,7 @@
 from allauth.core.exceptions import ImmediateHttpResponse
 from allauth.socialaccount.models import SocialAccount, SocialLogin
 from django.contrib.auth import SESSION_KEY
+from django.contrib.auth.models import AnonymousUser
 from django.test import Client, RequestFactory, TestCase
 from django.urls import reverse
 
@@ -139,11 +140,14 @@ class UserManagementTests(TestCase):
         sociallogin = SocialLogin(
             user=self.target, account=SocialAccount(provider="google", uid="managed-client-google")
         )
+        request = RequestFactory().get("/accounts/google/login/callback/")
+        request.user = AnonymousUser()
         with self.assertRaises(ImmediateHttpResponse) as raised:
             DesignPotSocialAccountAdapter().pre_social_login(
-                RequestFactory().get("/accounts/google/login/callback/"), sociallogin
+                request, sociallogin
             )
         self.assertEqual(raised.exception.response.status_code, 403)
+        self.assertIn("We couldn't sign you in.", raised.exception.response.content.decode())
 
     def test_admin_can_reset_another_local_password_and_target_sessions_expire(self):
         target_session = Client()

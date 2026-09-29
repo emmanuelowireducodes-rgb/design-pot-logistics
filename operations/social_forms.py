@@ -9,6 +9,7 @@ from .models import Organization
 class DesignPotSocialSignupForm(SignupForm):
     role = forms.ChoiceField(
         label="Account type",
+        widget=forms.RadioSelect(attrs={"class": "role-radio-control"}),
         choices=[
             ("client", "Client"),
             ("rider", "Rider"),
@@ -19,6 +20,11 @@ class DesignPotSocialSignupForm(SignupForm):
     last_name = forms.CharField(max_length=150, required=False)
     phone = forms.CharField(max_length=24)
     organization_name = forms.CharField(max_length=160, required=False)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for name, field in self.fields.items():
+            field.widget.attrs["aria-describedby"] = f"id_{name}_errors"
 
     def clean_email(self):
         email = super().clean_email()

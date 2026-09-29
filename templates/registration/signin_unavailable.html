@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% load static %}
+{% block title %}Sign-in unavailable{% endblock %}
+{% block public_content %}
+<div class="login-layout">
+  <section class="login-story" aria-label="Design-Pot Logistics">
+    <a class="brand" href="/" aria-label="Design-Pot Logistics home"><span class="brand-mark"><img src="{% static 'icon-192.png' %}" alt=""></span><span>DESIGN-POT<small>LOGISTICS</small></span></a>
+    <img class="login-brand-art" src="{% static 'design-pot-logo.png' %}" alt="Design-Pot Transport and Logistics">
+    <div class="auth-story-copy"><span class="eyebrow">SECURE ACCESS</span><h1>Your workspace,<br>managed with care.</h1><p>Contact Design-Pot Admin if you need help with account access.</p></div>
+  </section>
+  <section class="login-form" aria-labelledby="unavailable-title">
+    <div class="login-card auth-state-card">
+      <span class="eyebrow">SIGN-IN UNAVAILABLE</span>
+      <h1 id="unavailable-title">We couldn't sign you in.</h1>
+      <p class="muted">Please contact Design-Pot Admin for help with your account.</p>
+      <a class="button primary full" href="{% url 'login' %}">Return to sign in</a>
+    </div>
+  </section>
+</div>
+{% endblock %}

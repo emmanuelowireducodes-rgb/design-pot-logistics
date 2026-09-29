@@ -1,3 +1,60 @@
-﻿{% extends "base.html" %}{% load static %}{% block title %}Set up your Design-Pot account{% endblock %}{% block public_content %}
-<div class="login-layout"><section class="login-story"><img class="login-brand-art" src="{% static 'design-pot-logo.png' %}" alt="Design-Pot Transport and Logistics"><div><span class="eyebrow">ONE ACCOUNT. YOUR ROLE.</span><h1>Let’s get you<br>on the road.</h1><p>Choose the account that matches how you work with Design-Pot.</p></div></section><section class="login-form"><div class="login-card"><span class="eyebrow">FIRST-TIME GOOGLE SIGN-IN</span><h1>Complete your profile.</h1><p class="muted">Client accounts activate after setup. Rider and Driver access needs Admin approval and a linked vehicle.</p><form method="post">{% csrf_token %}{% if form.non_field_errors %}<div class="alert error">{{ form.non_field_errors }}</div>{% endif %}{% for field in form %}<div class="form-field">{{ field.label_tag }}{{ field }}{{ field.errors }}</div>{% endfor %}{% if redirect_field_value %}<input type="hidden" name="{{ redirect_field_name }}" value="{{ redirect_field_value }}">{% endif %}<button class="button primary full" type="submit">Create Design-Pot account</button></form></div></section></div>
+{% extends "base.html" %}
+{% load static %}
+{% block title %}Set up your Design-Pot account{% endblock %}
+{% block public_content %}
+<div class="login-layout onboarding-layout">
+  <section class="login-story" aria-label="About Design-Pot Logistics">
+    <a class="brand" href="/" aria-label="Design-Pot Logistics home">
+      <span class="brand-mark"><img src="{% static 'icon-192.png' %}" alt=""></span>
+      <span>DESIGN-POT<small>LOGISTICS</small></span>
+    </a>
+    <img class="login-brand-art" src="{% static 'design-pot-logo.png' %}" alt="Design-Pot Transport and Logistics">
+    <div class="auth-story-copy">
+      <span class="eyebrow">ONE ACCOUNT. YOUR ROLE.</span>
+      <h1>Let’s get you<br>on the road.</h1>
+      <p>Choose the account that matches how you work with Design-Pot.</p>
+    </div>
+    <small class="auth-story-footer">Accra, Ghana · DESIGN-POT LOGISTICS</small>
+  </section>
+  <section class="login-form" aria-labelledby="signup-title">
+    <div class="login-card onboarding-card">
+      <span class="eyebrow">FIRST-TIME GOOGLE SIGN-IN</span>
+      <h1 id="signup-title">Complete your profile</h1>
+      <p class="muted login-intro">Set up your Design-Pot Logistics account. Choose one role to get started.</p>
+      <form method="post" class="onboarding-form">
+        {% csrf_token %}
+        {% if form.non_field_errors %}<div class="alert error" role="alert">Please review the details below and try again.</div>{% endif %}
+        {% for field in form %}
+          {% if field.name == "role" %}
+            <fieldset class="role-fieldset" aria-describedby="id_role_errors">
+              <legend>{{ field.label }}</legend>
+              <p class="role-prompt">Choose the account type that fits your work.</p>
+              <div class="role-options">
+                {% for option in field.subwidgets %}
+                  <label class="role-option" for="{{ option.id_for_label }}">
+                    {{ option.tag }}
+                    <span class="role-option-copy">
+                      <strong>{{ option.choice_label }}</strong>
+                      <small>{% if forloop.counter == 1 %}Send and manage deliveries.{% elif forloop.counter == 2 %}Deliver packages by motorbike.{% else %}Handle deliveries using a vehicle.{% endif %}</small>
+                    </span>
+                  </label>
+                {% endfor %}
+              </div>
+              <div class="field-errors" id="id_role_errors" aria-live="polite">{% for error in field.errors %}<span>{{ error }}</span>{% endfor %}</div>
+            </fieldset>
+          {% else %}
+            <div class="form-field">
+              {{ field.label_tag }}{{ field }}
+              <div class="field-errors" id="id_{{ field.name }}_errors" aria-live="polite">{% for error in field.errors %}<span>{{ error }}</span>{% endfor %}</div>
+            </div>
+          {% endif %}
+        {% endfor %}
+        <div class="approval-note" role="note"><strong>For Rider and Driver accounts</strong><span>Delivery access starts after Design-Pot Admin approves your account and links a vehicle.</span></div>
+        {% if redirect_field_value %}<input type="hidden" name="{{ redirect_field_name }}" value="{{ redirect_field_value }}">{% endif %}
+        <button class="button primary full login-submit" type="submit">Create Design-Pot account</button>
+      </form>
+      <p class="login-help onboarding-help">Already have a Design-Pot account? <a href="{% url 'login' %}">Return to sign in</a>.</p>
+    </div>
+  </section>
+</div>
 {% endblock %}

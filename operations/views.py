@@ -58,7 +58,7 @@ class SignInView(LoginView):
                 return render(
                     request,
                     "registration/login.html",
-                    {"form": self.get_form(), "limited": True},
+                    self.get_context_data(form=self.get_form(), limited=True),
                     status=429,
                 )
             attempt.count += 1
