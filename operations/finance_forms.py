@@ -64,6 +64,13 @@ class SettlementForm(forms.Form):
         queryset=LedgerEntry.objects.none(),
         required=True,
         widget=forms.MultipleHiddenInput,
+        error_messages={
+            "required": "Select at least one reconciled COD item.",
+            "invalid_choice": (
+                "One or more selected COD items are no longer eligible for this Client. "
+                "Review the list and try again."
+            ),
+        },
     )
     method = forms.CharField(
         required=False,

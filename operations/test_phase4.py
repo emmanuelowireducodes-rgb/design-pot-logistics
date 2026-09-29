@@ -2,10 +2,11 @@
 import uuid
 from datetime import timedelta
 from decimal import Decimal
+from threading import Barrier, Thread
 
 from django.core.exceptions import PermissionDenied, ValidationError
-from django.db import DatabaseError, transaction
-from django.test import TestCase
+from django.db import DatabaseError, close_old_connections, transaction
+from django.test import TestCase, TransactionTestCase, skipUnlessDBFeature
 from django.utils import timezone
 
 from . import workflow
@@ -42,6 +43,7 @@ class Phase4FinanceTests(TestCase):
         )
         cls.admin = User.objects.create_user("phase4-admin", password="sample-pass", role="admin")
         cls.rider = User.objects.create_user("phase4-rider", password="sample-pass", role="rider")
+        cls.driver = User.objects.create_user("phase4-driver", password="sample-pass", role="driver")
         cls.other_rider = User.objects.create_user(
             "phase4-rider2", password="sample-pass", role="rider"
         )
@@ -192,6 +194,161 @@ class Phase4FinanceTests(TestCase):
                 request_key=uuid.uuid4(),
             )
 
+    def test_settlement_selector_shows_only_available_reconciled_cod(self):
+        eligible = self.make_delivery(reference="DPT-P4-SET-AVAILABLE", cod="120.00")
+        self.make_reconciled(eligible)
+        other_client_delivery = self.make_delivery(
+            organization=self.other_org, reference="DPT-P4-SET-OTHER", cod="90.00"
+        )
+        self.make_reconciled(other_client_delivery)
+        settled_delivery = self.make_delivery(reference="DPT-P4-SET-SETTLED", cod="30.00")
+        _, settled_reconciliation = self.make_reconciled(settled_delivery)
+        workflow.settle_reconciled_cod(
+            actor=self.admin,
+            organization_id=self.org.pk,
+            reconciliation_ids=[settled_reconciliation.pk],
+            request_key=uuid.uuid4(),
+        )
+        unrec_delivery = self.make_delivery(reference="DPT-P4-SET-COLLECTED", cod="55.00")
+        LedgerEntry.objects.create(
+            delivery=unrec_delivery,
+            actor=self.rider,
+            kind="cod_collected",
+            amount=unrec_delivery.cod_amount,
+            currency="GHS",
+            method="cash",
+        )
+
+        self.client.force_login(self.admin)
+        response = self.client.get(
+            "/admin/finance/settlements/", {"organization": str(self.org.pk)}
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Available to settle for Phase Four Client:")
+        self.assertContains(response, "GH₵120.00")
+        self.assertContains(response, eligible.reference)
+        self.assertNotContains(response, other_client_delivery.reference)
+        self.assertNotContains(response, settled_delivery.reference)
+        self.assertNotContains(response, unrec_delivery.reference)
+        self.assertContains(response, "Collected but unreconciled COD cannot be settled.")
+        self.assertContains(response, 'method="get"')
+        self.assertContains(response, "Show eligible COD")
+        self.assertContains(response, "Selected settlement amount:")
+        self.assertContains(response, 'data-settlement-item-amount-cents="12000"')
+        self.assertEqual(response.context["available_amount"], Decimal("120.00"))
+
+    def test_client_without_eligible_cod_sees_explicit_empty_state(self):
+        delivery = self.make_delivery(reference="DPT-P4-SET-UNRECONCILED")
+        LedgerEntry.objects.create(
+            delivery=delivery,
+            actor=self.rider,
+            kind="cod_collected",
+            amount=delivery.cod_amount,
+            currency="GHS",
+            method="cash",
+        )
+        self.client.force_login(self.admin)
+        response = self.client.get(
+            "/admin/finance/settlements/", {"organization": str(self.org.pk)}
+        )
+        self.assertContains(
+            response, "No reconciled COD is currently available to settle for this Client."
+        )
+        self.assertContains(response, "Available to settle for Phase Four Client:")
+        self.assertContains(response, "GH₵0.00")
+
+    def test_settlement_post_records_selected_items_and_ignores_manipulated_amount(self):
+        delivery = self.make_delivery(reference="DPT-P4-SET-POST", cod="145.25")
+        _, reconciliation = self.make_reconciled(delivery)
+        key = uuid.uuid4()
+        self.client.force_login(self.admin)
+
+        response = self.client.post(
+            "/admin/finance/settlements/",
+            {
+                "request_key": str(key),
+                "organization": str(self.org.pk),
+                "reconciliation_ids": [str(reconciliation.pk)],
+                "amount": "999999.99",
+                "method": "Reported bank transfer",
+                "external_reference": "BANK-P4-POST",
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        settlement = ClientSettlement.objects.get()
+        settled_entry = LedgerEntry.objects.get(kind="cod_settled")
+        self.assertEqual(settlement.amount, Decimal("145.25"))
+        self.assertEqual(settlement.organization, self.org)
+        self.assertEqual(settled_entry.reconciled_entry, reconciliation)
+        event = DomainEvent.objects.get(kind="cod.client_settlement_recorded")
+        self.assertEqual(event.actor, self.admin)
+        self.assertEqual(event.request_key, key)
+        self.assertEqual(event.payload["amount"], "145.25")
+        self.assertEqual(event.payload["organization_id"], str(self.org.pk))
+        self.assertContains(self.client.get(response["Location"]), "Settlement recorded.")
+
+        self.client.force_login(self.client_user)
+        client_finance = self.client.get("/client/finance/")
+        self.assertContains(client_finance, "GH₵145.25")
+        self.assertContains(client_finance, "GH₵0.00")
+
+    def test_invalid_empty_stale_and_cross_client_submissions_show_errors(self):
+        own = self.make_delivery(reference="DPT-P4-SET-OWN", cod="100.00")
+        _, own_reconciliation = self.make_reconciled(own)
+        other = self.make_delivery(
+            organization=self.other_org, reference="DPT-P4-SET-FOREIGN", cod="75.00"
+        )
+        _, foreign_reconciliation = self.make_reconciled(other)
+        self.client.force_login(self.admin)
+        base = {"request_key": str(uuid.uuid4()), "organization": str(self.org.pk)}
+
+        empty = self.client.post("/admin/finance/settlements/", base)
+        self.assertEqual(empty.status_code, 200)
+        self.assertContains(empty, "Select at least one reconciled COD item.")
+
+        cross_client = self.client.post(
+            "/admin/finance/settlements/",
+            {**base, "reconciliation_ids": [str(foreign_reconciliation.pk)]},
+        )
+        self.assertEqual(cross_client.status_code, 200)
+        self.assertContains(
+            cross_client,
+            "One or more selected COD items are no longer eligible for this Client.",
+        )
+        self.assertFalse(ClientSettlement.objects.exists())
+
+        malformed_client = self.client.post(
+            "/admin/finance/settlements/",
+            {**base, "organization": "not-a-client-id", "reconciliation_ids": [str(own_reconciliation.pk)]},
+        )
+        self.assertEqual(malformed_client.status_code, 200)
+        self.assertContains(malformed_client, "Select a valid choice")
+
+        valid_data = {
+            **base,
+            "request_key": str(uuid.uuid4()),
+            "reconciliation_ids": [str(own_reconciliation.pk)],
+        }
+        self.client.post("/admin/finance/settlements/", valid_data)
+        duplicate = self.client.post("/admin/finance/settlements/", valid_data)
+        self.assertEqual(duplicate.status_code, 200)
+        self.assertContains(duplicate, "no longer eligible for this Client")
+        self.assertEqual(ClientSettlement.objects.count(), 1)
+        self.assertEqual(LedgerEntry.objects.filter(kind="cod_settled").count(), 1)
+
+    def test_client_rider_and_driver_cannot_post_client_settlement(self):
+        for user in (self.client_user, self.rider, self.driver):
+            with self.subTest(role=user.role):
+                self.client.force_login(user)
+                response = self.client.post(
+                    "/admin/finance/settlements/",
+                    {"organization": str(self.org.pk), "reconciliation_ids": [str(uuid.uuid4())]},
+                )
+                self.assertEqual(response.status_code, 403)
+        self.assertFalse(ClientSettlement.objects.exists())
+
     def test_client_settlement_is_immutable_at_database_layer(self):
         settlement = ClientSettlement.objects.create(
             organization=self.org,
@@ -261,3 +418,83 @@ class Phase4FinanceTests(TestCase):
         self.client.force_login(self.rider)
         self.assertEqual(self.client.get("/client/finance/").status_code, 403)
         self.assertEqual(self.client.get("/admin/finance/cod/").status_code, 403)
+
+
+@skipUnlessDBFeature("has_select_for_update")
+class SettlementConcurrencyTests(TransactionTestCase):
+    def test_two_admin_settlements_cannot_settle_the_same_reconciliation_twice(self):
+        organization = Organization.objects.create(name="Concurrent settlement Client")
+        admin = User.objects.create_user(
+            "settlement-concurrency-admin", password="safe-test-password", role="admin"
+        )
+        rider = User.objects.create_user(
+            "settlement-concurrency-rider", password="safe-test-password", role="rider"
+        )
+        resource = Resource.objects.create(
+            user=rider, vehicle_type="bike", vehicle_name="Concurrency bike", registration="CT-1"
+        )
+        zone = OperationalZone.objects.create(name="Settlement concurrency zone")
+        pickup = Location.objects.create(display_address="Pickup", area="Osu", zone=zone)
+        destination = Location.objects.create(display_address="Drop", area="Labone", zone=zone)
+        job = Job.objects.create(organization=organization, created_by=admin)
+        pricing = PricingVersion.objects.create(label="Settlement concurrency pricing")
+        quote = Quote.objects.create(
+            job=job,
+            pricing_version=pricing,
+            amount=Decimal("10.00"),
+            breakdown={},
+            expires_at=timezone.now() + timedelta(days=1),
+        )
+        QuoteConfirmation.objects.create(job=job, quote=quote, actor=admin)
+        delivery = Delivery.objects.create(
+            reference="DPT-SET-CONCURRENCY",
+            job=job,
+            pickup=pickup,
+            destination=destination,
+            recipient_name="Recipient",
+            recipient_phone="+233200000001",
+            package_description="Parcel",
+            vehicle_type="bike",
+            status=Delivery.Status.DELIVERED,
+            payment_method="cod",
+            cod_amount=Decimal("80.00"),
+        )
+        Assignment.objects.create(
+            delivery=delivery, resource=resource, actor=admin, resource_snapshot={}
+        )
+        reconciliation = LedgerEntry.objects.create(
+            delivery=delivery,
+            actor=admin,
+            kind="cod_reconciled",
+            amount=Decimal("80.00"),
+            currency="GHS",
+        )
+        barrier = Barrier(2)
+        outcomes = []
+
+        def settle(key):
+            close_old_connections()
+            try:
+                barrier.wait(timeout=10)
+                workflow.settle_reconciled_cod(
+                    actor=admin,
+                    organization_id=organization.pk,
+                    reconciliation_ids=[reconciliation.pk],
+                    request_key=key,
+                )
+                outcomes.append("settled")
+            except ValidationError:
+                outcomes.append("already settled")
+            finally:
+                close_old_connections()
+
+        threads = [Thread(target=settle, args=(uuid.uuid4(),)) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=20)
+
+        self.assertTrue(all(not thread.is_alive() for thread in threads))
+        self.assertCountEqual(outcomes, ["settled", "already settled"])
+        self.assertEqual(ClientSettlement.objects.count(), 1)
+        self.assertEqual(LedgerEntry.objects.filter(kind="cod_settled").count(), 1)

@@ -870,9 +870,9 @@ def settle_reconciled_cod(
         raise ValidationError("Select at least one reconciled COD item.")
     if len(method.strip()) > 40 or len(external_reference.strip()) > 120 or len(note.strip()) > 500:
         raise ValidationError("Settlement details exceed the allowed length.")
-    organization = Organization.objects.select_for_update().get(pk=organization_id)
+    organization = Organization.objects.select_for_update(of=("self",)).get(pk=organization_id)
     entries = list(
-        LedgerEntry.objects.select_for_update()
+        LedgerEntry.objects.select_for_update(of=("self",))
         .filter(pk__in=ids, kind="cod_reconciled")
         .select_related("delivery__job")
         .order_by("pk")

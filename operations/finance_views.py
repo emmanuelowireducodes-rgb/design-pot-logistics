@@ -183,6 +183,12 @@ def client_settlements(request):
         if request.method == "POST"
         else request.GET.get("organization")
     )
+    try:
+        organization_id = (
+            Organization._meta.pk.to_python(organization_id) if organization_id else None
+        )
+    except (TypeError, ValueError, ValidationError):
+        organization_id = None
     organization = (
         Organization.objects.filter(pk=organization_id).first() if organization_id else None
     )
@@ -214,6 +220,14 @@ def client_settlements(request):
                 "One or more selected items changed while you were recording this settlement. Refresh and review the eligible items.",
             )
     eligible = _eligible_reconciliations(organization)
+    available_amount = eligible.aggregate(total=Sum("amount"))["total"] or ZERO
+    eligible_page = Paginator(eligible, 50).get_page(request.GET.get("page"))
+    selected_ids = {
+        str(value) for value in (form["reconciliation_ids"].value() or [])
+    } if form.is_bound else set()
+    for entry in eligible_page:
+        entry.settlement_amount_cents = int(entry.amount * 100)
+        entry.settlement_selected = str(entry.pk) in selected_ids
     settled = ClientSettlement.objects.select_related("organization", "recorded_by").annotate(
         item_count=Count("entries", filter=Q(entries__kind="cod_settled"))
     )
@@ -227,7 +241,8 @@ def client_settlements(request):
             "section": "finance",
             "form": form,
             "organization": organization,
-            "eligible_page": Paginator(eligible, 50).get_page(request.GET.get("page")),
+            "eligible_page": eligible_page,
+            "available_amount": available_amount,
             "settlements": Paginator(settled.order_by("-created_at"), 20).get_page(
                 request.GET.get("settled_page")
             ),
