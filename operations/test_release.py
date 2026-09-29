@@ -96,7 +96,7 @@ class V1ReleaseTests(TestCase):
         self.assertContains(response, "Destination address")
         self.assertContains(response, 'id="client-booking-form"')
         self.assertContains(response, 'form="client-booking-form"')
-        self.assertContains(response, "Prepare quote")
+        self.assertContains(response, "Get delivery price")
         self.assertNotContains(response, "Pickup area")
         self.assertNotContains(response, "Destination area")
         self.assertNotContains(response, "operational zone")

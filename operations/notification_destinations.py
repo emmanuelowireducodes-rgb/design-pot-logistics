@@ -5,13 +5,25 @@ from uuid import UUID
 from django.urls import reverse
 
 from .access import visible_deliveries
-from .models import DeliveryRun, User
+from .models import BulkBooking, DeliveryRun, User
 
 
 def notification_destination(notification, user):
     """Return an existing authorized app URL, or None when no useful target exists."""
     event = notification.event
     payload = event.payload if isinstance(event.payload, dict) else {}
+
+    if event.kind == "bulk.quote_ready":
+        try:
+            bulk_id = UUID(str(payload.get("bulk_booking_id")))
+        except (ValueError, TypeError, AttributeError):
+            bulk_id = None
+        if bulk_id and user.role == User.Role.CLIENT:
+            batch = BulkBooking.objects.filter(
+                pk=bulk_id, organization_id=user.organization_id
+            ).first()
+            if batch:
+                return reverse("bulk-booking-detail", kwargs={"bulk_id": batch.pk})
 
     run_id = payload.get("run_id")
     if run_id:

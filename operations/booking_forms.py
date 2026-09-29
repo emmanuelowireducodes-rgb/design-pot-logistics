@@ -9,12 +9,14 @@ class BookingForm(forms.Form):
     pickup_zone = forms.ModelChoiceField(
         queryset=OperationalZone.objects.filter(active=True).order_by("name"),
         required=False,
-        widget=forms.HiddenInput,
+        label="Pickup pricing area",
+        empty_label="Choose pickup area",
     )
     destination_zone = forms.ModelChoiceField(
         queryset=OperationalZone.objects.filter(active=True).order_by("name"),
         required=False,
-        widget=forms.HiddenInput,
+        label="Destination pricing area",
+        empty_label="Choose destination area",
     )
     pickup_google_maps_url = forms.CharField(
         required=False,
@@ -106,17 +108,12 @@ class BookingForm(forms.Form):
 
     def clean(self):
         data = super().clean() or {}
-        if not self.allow_zone_classification:
-            # Public clients cannot choose pricing zones, including by editing
-            # a hidden form value. The internal service may receive an explicit
-            # authoritative classification from a trusted caller.
-            data["pickup_area"] = "Unclassified"
-            data["destination_area"] = "Unclassified"
-            data["pickup_zone"] = None
-            data["destination_zone"] = None
-        else:
-            data["pickup_area"] = data.get("pickup_area") or "Unclassified"
-            data["destination_area"] = data.get("destination_area") or "Unclassified"
+        for prefix in ("pickup", "destination"):
+            zone = data.get(f"{prefix}_zone")
+            if zone:
+                data[f"{prefix}_area"] = zone.name
+            else:
+                data[f"{prefix}_area"] = "Unclassified"
         if data.get("service") == "premium":
             start, end = data.get("window_start"), data.get("window_end")
             if not start or not end or end <= start:

@@ -1,7 +1,7 @@
 from django.contrib.auth.views import LogoutView
 from django.urls import include, path
 
-from operations import finance_views, push, run_views, user_management, views
+from operations import bulk_views, finance_views, push, run_views, user_management, views
 from operations import operational_views as ops
 from operations import phase25_views as foundation
 
@@ -62,6 +62,8 @@ urlpatterns = [
     path("admin/fleet/<uuid:resource_id>/duty/", ops.resource_duty, name="resource-duty"),
     path("logout/", LogoutView.as_view(), name="logout"),
     path("client/booking/", ops.booking, name="booking"),
+    path("client/bulk-booking/", bulk_views.bulk_booking, name="bulk-booking"),
+    path("client/bulk-booking/<uuid:bulk_id>/", bulk_views.bulk_booking_detail, name="bulk-booking-detail"),
     path("client/deliveries/<uuid:delivery_id>/edit/", ops.booking, name="edit-booking"),
     path("client/quotes/<uuid:quote_id>/", ops.quote_review, name="quote-review"),
     path("admin/deliveries/<uuid:delivery_id>/assign/", ops.assign, name="assign-delivery"),

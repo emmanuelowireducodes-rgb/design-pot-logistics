@@ -11,7 +11,7 @@ from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils import timezone
 
-from . import workflow
+from . import price_cards, workflow
 from .booking_forms import BookingForm
 from .models import (
     Assignment,
@@ -21,7 +21,9 @@ from .models import (
     LedgerEntry,
     Location,
     Notification,
+    OperationalZone,
     Organization,
+    PriceCard,
     ProofOfDelivery,
     Quote,
     QuoteConfirmation,
@@ -43,6 +45,9 @@ class Phase2Tests(TestCase):
     bike: Resource
     second_bike: Resource
     car: Resource
+    origin: OperationalZone
+    destination: OperationalZone
+    general_card: PriceCard
 
     @classmethod
     def setUpTestData(cls):
@@ -55,6 +60,21 @@ class Phase2Tests(TestCase):
             "other2", role="client", organization=cls.other_organization
         )
         cls.admin = User.objects.create_user("dispatch2", role="admin", first_name="Dispatch")
+        cls.origin = OperationalZone.objects.create(name="Osu")
+        cls.destination = OperationalZone.objects.create(name="East Legon")
+        cls.general_card = price_cards.save_card(actor=cls.admin, name="Phase 2 test card")
+        price_cards.save_route_price(
+            actor=cls.admin, card_id=cls.general_card.pk,
+            origin_id=cls.origin.pk, destination_id=cls.destination.pk,
+            bike_price=Decimal("20.00"), car_price=Decimal("50.00"),
+            service="standard", bidirectional=True, reason="Test fixture rates",
+        )
+        price_cards.save_route_price(
+            actor=cls.admin, card_id=cls.general_card.pk,
+            origin_id=cls.origin.pk, destination_id=cls.destination.pk,
+            bike_price=Decimal("30.00"), car_price=Decimal("50.00"),
+            service="premium", bidirectional=True, reason="Test fixture Premium rates",
+        )
         cls.rider = User.objects.create_user("rider2", role="rider", first_name="Kofi")
         cls.other_rider = User.objects.create_user("rider3", role="rider", first_name="Esi")
         cls.driver = User.objects.create_user("driver2", role="driver")
@@ -91,6 +111,8 @@ class Phase2Tests(TestCase):
         data = {
             "booking_key": str(uuid.uuid4()),
             "revision": 0,
+            "pickup_zone": str(self.origin.pk),
+            "destination_zone": str(self.destination.pk),
             "pickup_address": "Shop 14, Oxford Street",
             "pickup_area": "Osu",
             "pickup_instructions": "Blue door",
@@ -178,11 +200,11 @@ class Phase2Tests(TestCase):
 
     def test_booking_persists_structured_ungeocoded_locations(self):
         with patch("operations.maps.RoadDistance.road_kilometres", return_value=None):
-            delivery = self.draft()
+            delivery = self.draft(pickup_zone="", destination_zone="")
         self.assertIsNone(delivery.reference)
         self.assertIsNone(delivery.pickup.latitude)
         self.assertIsNone(delivery.destination.longitude)
-        self.assertEqual(delivery.pickup.area, "Osu")
+        self.assertEqual(delivery.pickup.area, "Unclassified")
         self.assertEqual(delivery.cod_amount, Decimal("180.00"))
         self.assertEqual(delivery.status, "requested")
         self.assertIsNone(delivery.job.current_quote)
@@ -499,25 +521,28 @@ class Phase2Tests(TestCase):
     def test_pricing_changes_do_not_change_accepted_quote(self):
         delivery = self.confirmed()
         original = delivery.job.current_quote
-        rules = {
-            "bike": {"base": "99.00", "minimum": "99.00", "per_km": "9.00"},
-            "car": {"base": "120.00", "minimum": "120.00", "per_km": "12.00"},
-            "premium_surcharge": "20.00",
-            "rounding": "1.00",
-            "quote_minutes": 30,
-        }
-        workflow.update_pricing(actor=self.admin, rules=rules)
+        rate = price_cards.current_rates().get(
+            card=self.general_card, vehicle="bike", service="standard",
+        )
+        price_cards.save_rate(
+            actor=self.admin, card_id=self.general_card.pk,
+            rate_key=rate.rate_key, expected_version=rate.version,
+            origin=self.origin, destination=self.destination, vehicle="bike",
+            service="standard", amount=Decimal("99.00"), bidirectional=True,
+            active=True, effective_at=timezone.now(), expires_at=None,
+            reason="Future test price change",
+        )
         new_delivery = self.draft()
         self.assertEqual(new_delivery.job.current_quote.amount, Decimal("99.00"))
         original.refresh_from_db()
         self.assertEqual(original.amount, Decimal("20.00"))
         with self.assertRaises(PermissionDenied):
-            workflow.update_pricing(actor=self.customer, rules=rules)
+            workflow.update_pricing(actor=self.customer, rules={})
 
     @override_settings(ALLOW_DEVELOPMENT_PRICING=False)
     def test_development_pricing_disabled_requests_admin_quote(self):
-        # Phase 2.5 retains the ban on unapproved prices, but saves the request for Admin review.
-        delivery = self.draft()
+        # A delivery with no selected pricing areas has no eligible Price Card.
+        delivery = self.draft(pickup_zone="", destination_zone="")
         self.assertIsNone(delivery.job.current_quote_id)
         self.assertTrue(delivery.job.quote_requested)
         self.assertEqual(Quote.objects.count(), 0)
@@ -755,7 +780,7 @@ class Phase2Tests(TestCase):
         self.assertEqual(booking.status_code, 302)
         delivery = Delivery.objects.get()
         quote_url = booking["Location"]
-        self.assertContains(self.client.get(quote_url), "Development quote")
+        self.assertContains(self.client.get(quote_url), "GHS 20.00")
         self.assertEqual(self.client.post(quote_url).status_code, 302)
         delivery.refresh_from_db()
         self.assertEqual(delivery.status, "assigned")

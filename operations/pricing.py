@@ -183,53 +183,43 @@ def priced_quote(delivery, *, amount, source, rules, mode, rate=None, actor=None
 
 
 def prepare_quote(delivery, distance_provider=None):
-    """Explicit resolver: contract -> active general mode -> configured fallback."""
-    from .maps import MapUnavailable
+    """Resolve client terms, then general cards; unmatched routes need Admin review."""
     from .models import User
     from .price_cards import matching_rate
     from .services import emit_event
 
-    config = PricingConfiguration.objects.first()
-    mode = config.mode if config else "DISTANCE_BASED"
-    fallback = config.fallback if config else "REQUIRE_ADMIN_QUOTE"
     contract = matching_rate(delivery, delivery.job.organization)
-    rate = contract or (matching_rate(delivery, None) if mode == "FIXED_PRICE_CARD" else None)
+    rate = contract or matching_rate(delivery, None)
     if rate:
         return priced_quote(
             delivery,
             amount=rate.amount,
             source="CLIENT_CONTRACT_RATE" if contract else "GENERAL_FIXED_RATE",
             rules={"rate_id": str(rate.pk), "amount": str(rate.amount)},
-            mode=mode,
+            mode="PRICE_CARD",
             rate=rate,
         )
-    manual = mode == "FIXED_PRICE_CARD" and fallback == "REQUIRE_ADMIN_QUOTE"
-    if not manual and active_version().is_sample and not settings.ALLOW_DEVELOPMENT_PRICING:
-        manual = True
-    if not manual:
-        try:
-            return _distance_quote(delivery, distance_provider, mode)
-        except MapUnavailable:
-            manual = True
-    if manual:
-        delivery.job.current_quote = None
-        delivery.job.quote_requested = True
-        delivery.job.save(update_fields=["current_quote", "quote_requested"])
-        emit_event(
-            actor=delivery.job.created_by,
-            kind="quote.review_requested",
-            delivery=delivery,
-            title="Price confirmation required",
-            message="Dispatch will review the delivery price.",
-            recipients=list(User.objects.filter(role="admin", is_active=True)),
-            payload={"mode": mode, "fallback": fallback},
-        )
-        return None
+    delivery.job.current_quote = None
+    delivery.job.quote_requested = True
+    delivery.job.save(update_fields=["current_quote", "quote_requested"])
+    emit_event(
+        actor=delivery.job.created_by,
+        kind="quote.review_requested",
+        delivery=delivery,
+        title="Price confirmation required",
+        message="Dispatch will review the delivery price.",
+        recipients=list(User.objects.filter(role="admin", is_active=True)),
+        payload={"pricing": "price_card_unmatched"},
+    )
+    return None
 
 
 @transaction.atomic
-def manual_quote(*, actor, delivery_id, amount, reason, expected_revision, request_key):
-    from .models import Delivery, Job, QuoteConfirmation
+def manual_quote(
+    *, actor, delivery_id, amount, reason, expected_revision, request_key,
+    save_as_price_card=False, card_scope="general",
+):
+    from .models import BulkBooking, Delivery, Job, QuoteConfirmation, User
     from .price_cards import admin
     from .services import emit_event
     from .workflow import audiences, replay, request_uuid
@@ -258,6 +248,34 @@ def manual_quote(*, actor, delivery_id, amount, reason, expected_revision, reque
         or not reason.strip()
     ):
         raise ValidationError("Enter a valid amount and a reason for the manual quote.")
+    if save_as_price_card:
+        if card_scope not in ("general", "client"):
+            raise ValidationError("Choose a valid Price Card scope.")
+        if not delivery.pickup.zone_id or not delivery.destination.zone_id:
+            raise ValidationError("Assign both pricing areas before saving this route to Price Cards.")
+        from . import price_cards
+
+        organization = job.organization if card_scope == "client" else None
+        card = price_cards.get_or_create_scoped_card(
+            actor=actor,
+            organization=organization,
+            name=(f"{organization.name} delivery rates" if organization else "General delivery rates"),
+        )
+        if not card.active:
+            raise ValidationError("The selected Price Card is inactive.")
+        price_cards.save_route_price(
+            actor=actor,
+            card_id=card.pk,
+            origin_id=delivery.pickup.zone_id,
+            destination_id=delivery.destination.zone_id,
+            bike_price=amount if delivery.vehicle_type == "bike" else None,
+            car_price=amount if delivery.vehicle_type == "car" else None,
+            bidirectional=True,
+            service=delivery.service,
+            active=True,
+            reason=f"Admin quote {delivery.pk}: {reason.strip()}",
+            allow_update=True,
+        )
     config = PricingConfiguration.objects.first()
     delivery.job.revision += 1
     delivery.job.save(update_fields=["revision"])
@@ -269,14 +287,37 @@ def manual_quote(*, actor, delivery_id, amount, reason, expected_revision, reque
         mode=config.mode if config else "DISTANCE_BASED",
         actor=actor,
     )
+    recipients = audiences(delivery, admins=False) if not job.bulk_booking_id else []
     emit_event(
         actor=actor,
         kind="quote.manual_created",
         delivery=delivery,
         title="Your delivery quote is ready",
         message="Review your delivery price before confirming.",
-        recipients=audiences(delivery, admins=False),
+        recipients=recipients,
         request_key=request_uuid(request_key),
         payload={"quote_id": str(quote.pk), "amount": str(amount), "reason": reason},
     )
+    if job.bulk_booking_id:
+        batch = BulkBooking.objects.select_for_update().get(pk=job.bulk_booking_id)
+        pending = Job.objects.filter(bulk_booking=batch, quote_requested=True).exists()
+        if not pending and not batch.quote_ready_notified:
+            ready_count = Job.objects.filter(
+                bulk_booking=batch, current_quote__source="ADMIN_MANUAL_QUOTE",
+                quoteconfirmation__isnull=True,
+            ).count()
+            batch.quote_ready_notified = True
+            batch.save(update_fields=["quote_ready_notified"])
+            emit_event(
+                actor=actor,
+                kind="bulk.quote_ready",
+                title=f"{ready_count} delivery quote{'s' if ready_count != 1 else ''} ready",
+                message="Review the new delivery prices in your bulk request.",
+                recipients=list(
+                    User.objects.filter(
+                        role="client", organization_id=batch.organization_id, is_active=True
+                    )
+                ),
+                payload={"bulk_booking_id": str(batch.pk), "count": ready_count},
+            )
     return quote

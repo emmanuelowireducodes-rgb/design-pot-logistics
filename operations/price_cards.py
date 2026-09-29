@@ -57,8 +57,8 @@ def matching_rate(delivery, organization):
 @transaction.atomic
 def save_card(*, actor, name, organization=None, active=True, card_id=None):
     admin(actor)
-    # Serialize card creation too: a general card has a single stable scope key.
-    User.objects.select_for_update().get(pk=actor.pk)
+    # Serialize scope creation too: the general card has one stable scope key.
+    list(User.objects.select_for_update().filter(role="admin", is_active=True).order_by("pk"))
     card = (
         PriceCard.objects.select_for_update().get(pk=card_id)
         if card_id
@@ -89,6 +89,17 @@ def save_card(*, actor, name, organization=None, active=True, card_id=None):
 
 
 @transaction.atomic
+def get_or_create_scoped_card(*, actor, organization, name):
+    admin(actor)
+    list(User.objects.select_for_update().filter(role="admin", is_active=True).order_by("pk"))
+    scope_key = f"client:{organization.pk}" if organization else "general"
+    card = PriceCard.objects.select_for_update().filter(scope_key=scope_key).first()
+    if card:
+        return card
+    return save_card(actor=actor, name=name, organization=organization)
+
+
+@transaction.atomic
 def save_rate(*, actor, card_id, expected_version=None, rate_key=None, **values):
     admin(actor)
     card = PriceCard.objects.select_for_update().get(pk=card_id)
@@ -113,6 +124,8 @@ def save_rate(*, actor, card_id, expected_version=None, rate_key=None, **values)
     }
     if set(values) - allowed:
         raise ValidationError("Unexpected rate fields.")
+    if values.get("bidirectional") and values["destination"].pk.int < values["origin"].pk.int:
+        values["origin"], values["destination"] = values["destination"], values["origin"]
     rate = FixedRate(
         card=card,
         actor=actor,
@@ -168,24 +181,41 @@ def save_route_price(
     bidirectional=True, service="standard", active=True, effective_at=None,
     expires_at=None, reason="", editing=False,
     original_bidirectional=None,
+    allow_update=False,
 ):
     """Save the simple bike/car route row as immutable per-vehicle rate versions."""
     admin(actor)
     card = PriceCard.objects.select_for_update().get(pk=card_id)
     origin = OperationalZone.objects.get(pk=origin_id, active=True)
     destination = OperationalZone.objects.get(pk=destination_id, active=True)
-    if origin.pk == destination.pk:
-        raise ValidationError("Choose a different destination area.")
+    if bidirectional and destination.pk.int < origin.pk.int:
+        origin, destination = destination, origin
+    source_bidirectional = (
+        original_bidirectional if original_bidirectional is not None else bidirectional
+    )
     if bike_price is None and car_price is None and not editing:
         raise ValidationError("Enter a Bike price, a Car price, or both.")
     effective_at = effective_at or timezone.now()
     reason = reason.strip() or "Updated through the route price card."
     for vehicle, amount in (("bike", bike_price), ("car", car_price)):
-        previous = current_rates().filter(
-            card=card, origin=origin, destination=destination, vehicle=vehicle,
-            service=service,
-            bidirectional=(original_bidirectional if original_bidirectional is not None else bidirectional),
-        ).first()
+        pair = Q(origin=origin, destination=destination)
+        if source_bidirectional:
+            pair |= Q(origin=destination, destination=origin)
+        previous_rates = current_rates().filter(
+            card=card, vehicle=vehicle, service=service,
+        ).filter(pair)
+        if not (allow_update and bidirectional):
+            previous_rates = previous_rates.filter(bidirectional=source_bidirectional)
+        previous_matches = list(previous_rates.order_by("pk")[:2])
+        if len(previous_matches) > 1:
+            raise ValidationError(
+                "Conflicting directional rates cover this route. Review the existing card first."
+            )
+        previous = previous_matches[0] if previous_matches else None
+        if previous and not editing and not allow_update:
+            raise ValidationError(
+                "A price already exists for this route, vehicle and service. Edit the existing route."
+            )
         if amount is None:
             if editing and previous and previous.active:
                 save_rate(

@@ -187,6 +187,12 @@ def assign_zone(*, actor, delivery_id, side, zone_id, reason):
     setattr(delivery, side, new)
     delivery.save(update_fields=[side])
     if delivery.status == "requested":
+        if delivery.job.bulk_booking_id:
+            from .models import BulkBooking
+
+            BulkBooking.objects.select_for_update().filter(pk=delivery.job.bulk_booking_id).update(
+                quote_ready_notified=False
+            )
         from .pricing import prepare_quote
 
         delivery.job.revision += 1

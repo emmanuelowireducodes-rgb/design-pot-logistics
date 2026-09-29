@@ -1,3 +1,4 @@
+import re
 import uuid
 from datetime import datetime, time, timedelta
 
@@ -232,6 +233,12 @@ def queue(request, portal):
 def detail(request, delivery_id):
     delivery = get_object_or_404(visible_deliveries(request.user), pk=delivery_id)
     assignment = workflow.latest_assignment(delivery)
+    assigned_contact_phone = ""
+    if request.user.role == "client" and assignment:
+        candidate = assignment.resource.user.phone.strip()
+        safe_phone = re.sub(r"[ ()-]", "", candidate)
+        if re.fullmatch(r"\+?[0-9]{7,24}", safe_phone):
+            assigned_contact_phone = safe_phone
     run_stop = RunStop.objects.select_related("run__resource__user").filter(
         delivery=delivery,
         run__status__in=[DeliveryRun.Status.DRAFT, DeliveryRun.Status.READY, DeliveryRun.Status.IN_PROGRESS],
@@ -253,6 +260,7 @@ def detail(request, delivery_id):
         "section": "deliveries",
         "delivery": delivery,
         "assignment": assignment,
+        "assigned_contact_phone": assigned_contact_phone,
         "run_stop": run_stop,
         "quote": quote,
         "confirmation": confirmation,

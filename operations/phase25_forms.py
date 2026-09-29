@@ -35,7 +35,9 @@ class RateForm(forms.Form):
     amount = forms.DecimalField(
         label="All-inclusive delivery fee (GHS)", min_value=0, max_digits=12, decimal_places=2
     )
-    bidirectional = forms.BooleanField(required=False, label="Apply this rate in both directions")
+    bidirectional = forms.BooleanField(
+        required=False, initial=True, label="Apply this rate in both directions"
+    )
     active = forms.BooleanField(required=False, initial=True)
     effective_at = forms.DateTimeField(
         initial=timezone.now,
@@ -85,8 +87,6 @@ class RoutePriceForm(forms.Form):
 
     def clean(self):
         cleaned = super().clean() or {}
-        if cleaned.get("origin") == cleaned.get("destination"):
-            self.add_error("destination", "Choose a different destination area.")
         if cleaned.get("bike_price") is None and cleaned.get("car_price") is None:
             raise forms.ValidationError("Enter a Bike price, a Car price, or both.")
         return cleaned
@@ -106,6 +106,15 @@ class ManualQuoteForm(forms.Form):
         label="Delivery fee (GHS)", min_value=0, max_digits=12, decimal_places=2
     )
     reason = forms.CharField(max_length=500, widget=forms.Textarea(attrs={"rows": 3}))
+    save_as_price_card = forms.BooleanField(
+        required=False, label="Add this route to Price Cards for future deliveries"
+    )
+    card_scope = forms.ChoiceField(
+        required=False,
+        choices=[("general", "General card"), ("client", "This client's card")],
+        initial="general",
+        label="Save route for",
+    )
 
 
 class ZoneAssignmentForm(forms.Form):

@@ -22,13 +22,11 @@ from .models import (
     FixedRate,
     OperationalZone,
     PriceCard,
-    PricingConfiguration,
 )
 from .operational_views import errors
 from .phase25_forms import (
     CardForm,
     ManualQuoteForm,
-    ModeForm,
     RateForm,
     RoutePriceForm,
     ZoneAssignmentForm,
@@ -46,26 +44,15 @@ def edit_page(request, title, form, back, **extra):
 
 @roles_required("admin")
 def pricing_home(request):
-    config = PricingConfiguration.objects.first()
-    form = ModeForm(
-        request.POST or None,
-        initial={
-            "mode": config.mode if config else "DISTANCE_BASED",
-            "fallback": config.fallback if config else "REQUIRE_ADMIN_QUOTE",
-        },
-    )
-    if request.method == "POST" and form.is_valid():
-        price_cards.change_mode(actor=request.user, **form.cleaned_data)
-        messages.success(request, "General pricing mode saved. Confirmed quotes are unchanged.")
-        return redirect("pricing")
+    if request.method == "POST":
+        return redirect("cards")
     return render(
         request,
         "operations/pricing_home.html",
         {
             "title": "Pricing",
             "section": "pricing",
-            "form": form,
-            "mode": config.get_mode_display() if config else "Distance based",
+            "mode": "Price Cards first · Admin quote when no route is priced",
             "pending": Delivery.objects.filter(
                 job__quote_requested=True, status="requested"
             ).count(),
@@ -312,6 +299,11 @@ def manual_quote(request, delivery_id):
         request.POST or None,
         initial={"request_key": uuid.uuid4(), "expected_revision": delivery.job.revision},
     )
+    if not delivery.pickup.zone_id or not delivery.destination.zone_id:
+        form.fields["save_as_price_card"].disabled = True
+        form.fields["save_as_price_card"].help_text = (
+            "Both pricing areas are needed before this route can be saved. Correct the areas first."
+        )
     if request.method == "POST" and form.is_valid():
         try:
             pricing.manual_quote(actor=request.user, delivery_id=delivery.pk, **form.cleaned_data)

@@ -198,7 +198,8 @@ class Foundation25Tests(TestCase):
             amount="0.01",
         )
         self.assertEqual(delivery.pickup.zone_id, self.destination.pk)
-        self.assertEqual(delivery.job.current_quote.source, "GENERAL_DISTANCE_RATE")
+        self.assertIsNone(delivery.job.current_quote_id)
+        self.assertTrue(delivery.job.quote_requested)
         with self.assertRaises(ValidationError):
             self.draft(pickup_zone="not-a-zone")
 
@@ -221,6 +222,7 @@ class Foundation25Tests(TestCase):
             locations.save_zone(actor=self.customer, name="Cheap zone", active=True, boundary=[])
 
     def test_zone_correction_is_append_only_and_audited(self):
+        self.rate(self.card(), bidirectional=True)
         delivery = self.resolved()
         old_id = delivery.pickup_id
         self.confirm_without_auto_assignment(delivery.job.current_quote_id)
@@ -277,8 +279,8 @@ class Foundation25Tests(TestCase):
         self.assertRedirects(response, reverse("price-pending", args=[Delivery.objects.get().pk]))
         delivery = Delivery.objects.get()
         self.assertEqual(delivery.pickup.display_address, "Apartment 4, Ring Road")
-        self.assertIsNone(delivery.pickup.zone_id)
-        self.assertEqual(delivery.pickup.area, "Unclassified")
+        self.assertEqual(delivery.pickup.zone_id, self.origin.pk)
+        self.assertEqual(delivery.pickup.area, self.origin.name)
         self.assertEqual(delivery.pickup.google_maps_url, "")
         self.assertIsNone(delivery.pickup.latitude)
 
@@ -366,20 +368,20 @@ class Foundation25Tests(TestCase):
         self.assertEqual(quote.source, "GENERAL_FIXED_RATE")
         self.assertEqual(quote.amount, Decimal("70"))
 
-    def test_distance_pricing_uses_road_provider_not_straight_line(self):
+    def test_price_card_pricing_never_calls_road_distance(self):
         with patch(
             "operations.maps.RoadDistance.road_kilometres", return_value=Decimal("12.4")
         ) as road:
             delivery = self.draft()
-        self.assertEqual(road.call_count, 1)
-        self.assertEqual(delivery.job.current_quote.amount, Decimal("45"))
-        self.assertEqual(delivery.job.current_quote.breakdown["distance_km"], "12.4")
+        self.assertEqual(road.call_count, 0)
+        self.assertIsNone(delivery.job.current_quote_id)
+        self.assertTrue(delivery.job.quote_requested)
 
-    def test_missing_fixed_rate_can_fall_back_to_distance(self):
+    def test_missing_fixed_rate_never_falls_back_to_distance(self):
         self.mode(fallback="FALLBACK_TO_DISTANCE_PRICING")
-        quote = self.resolved().job.current_quote
-        self.assertEqual(quote.source, "GENERAL_DISTANCE_RATE")
-        self.assertEqual(quote.breakdown["general_mode"], "FIXED_PRICE_CARD")
+        delivery = self.resolved()
+        self.assertIsNone(delivery.job.current_quote_id)
+        self.assertTrue(delivery.job.quote_requested)
 
     def test_missing_fixed_rate_requests_quote_without_amount(self):
         self.mode()
@@ -502,18 +504,21 @@ class Foundation25Tests(TestCase):
             )
 
     def test_pending_reprice_cannot_confirm_old_quote(self):
-        delivery = self.draft()
+        self.rate(self.card(), bidirectional=True)
+        delivery = self.resolved()
         old_quote = delivery.job.current_quote
         self.mode()
         workflow.save_booking(
-            actor=self.customer, delivery_id=delivery.pk, data=self.booking_data(revision=1)
+            actor=self.customer, delivery_id=delivery.pk,
+            data=self.booking_data(revision=1, pickup_zone=self.origin.pk,
+                                   destination_zone=self.destination.pk),
         )
         with self.assertRaises(ValidationError):
             workflow.confirm_quote(actor=self.customer, quote_id=old_quote.pk)
         self.client.force_login(self.customer)
         self.assertContains(
             self.client.get(reverse("quote-review", args=[old_quote.pk])),
-            "Price confirmation required",
+            "This quote was replaced",
         )
 
     def test_rate_history_is_immutable_in_database(self):
@@ -625,13 +630,13 @@ class Foundation25Tests(TestCase):
         self.assertContains(self.client.get(reverse("card-rates", args=[card.pk])), "+ Add Route Price")
 
     @override_settings(ALLOW_DEVELOPMENT_PRICING=False)
-    def test_approved_distance_configuration_uses_actual_road_distance(self):
+    def test_approved_distance_configuration_is_not_used_for_client_quote(self):
         rules = pricing.active_version().rules
         version = workflow.update_pricing(actor=self.admin, rules=rules, is_sample=False)
         self.assertFalse(version.is_sample)
         delivery = self.resolved()
-        self.assertEqual(delivery.job.current_quote.amount, Decimal("40"))
-        self.assertFalse(delivery.job.current_quote.breakdown["development"])
+        self.assertIsNone(delivery.job.current_quote_id)
+        self.assertTrue(delivery.job.quote_requested)
         self.assertTrue(
             DomainEvent.objects.filter(kind="pricing.distance_approved", actor=self.admin).exists()
         )

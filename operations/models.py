@@ -151,6 +151,9 @@ class Job(Record):
     organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
     created_by = models.ForeignKey(User, on_delete=models.PROTECT)
     is_bulk = models.BooleanField(default=False)
+    bulk_booking = models.ForeignKey(
+        "BulkBooking", null=True, blank=True, on_delete=models.PROTECT, related_name="jobs"
+    )
     booking_key = models.UUIDField(null=True, blank=True, unique=True)
     revision = models.PositiveIntegerField(default=0)
     quote_requested = models.BooleanField(default=False, db_index=True)
@@ -411,6 +414,16 @@ class ClientSettlement(AppendOnly):
         ]
 
 
+class BulkBooking(Record):
+    """A client-visible group of independently quoted and dispatched deliveries."""
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    created_by = models.ForeignKey(User, on_delete=models.PROTECT)
+    pickup = models.ForeignKey(Location, on_delete=models.PROTECT)
+    request_key = models.UUIDField(unique=True)
+    quote_ready_notified = models.BooleanField(default=False)
+
+
 class LedgerEntry(AppendOnly):
     delivery = models.ForeignKey(Delivery, on_delete=models.PROTECT, related_name="ledger")
     actor = models.ForeignKey(User, on_delete=models.PROTECT)
@@ -595,7 +608,7 @@ class FixedRate(AppendOnly):
         max_length=8, choices=[("standard", "Standard"), ("premium", "Premium")]
     )
     amount = models.DecimalField(max_digits=12, decimal_places=2)
-    bidirectional = models.BooleanField(default=False)
+    bidirectional = models.BooleanField(default=True)
     active = models.BooleanField(default=True)
     effective_at = models.DateTimeField(default=timezone.now)
     expires_at = models.DateTimeField(null=True, blank=True)

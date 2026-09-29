@@ -10,7 +10,7 @@ from django.test import TestCase, skipUnlessDBFeature
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
-from . import runs, workflow
+from . import price_cards, runs, workflow
 from .models import (
     Availability,
     Delivery,
@@ -46,6 +46,15 @@ class DeliveryRunTests(TestCase):
         cls.osu = OperationalZone.objects.create(name="Osu", active=True)
         cls.labone = OperationalZone.objects.create(name="Labone", active=True)
         cls.madina = OperationalZone.objects.create(name="Madina", active=True)
+        cls.card = price_cards.save_card(actor=cls.admin, name="Run test card")
+        for destination in (cls.osu, cls.labone, cls.madina):
+            for service in ("standard", "premium"):
+                price_cards.save_route_price(
+                    actor=cls.admin, card_id=cls.card.pk,
+                    origin_id=cls.osu.pk, destination_id=destination.pk,
+                    bike_price=Decimal("20.00"), car_price=Decimal("50.00"),
+                    service=service, bidirectional=True, reason="Run test fixture",
+                )
 
     def setUp(self):
         distance = patch("operations.maps.RoadDistance.road_kilometres", return_value=Decimal("5"))

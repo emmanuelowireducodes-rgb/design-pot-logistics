@@ -124,13 +124,13 @@ def record_status(delivery, actor, target, note=""):
 
 
 @transaction.atomic
-def save_booking(*, actor, data, delivery_id=None):
+def save_booking(*, actor, data, delivery_id=None, bulk_booking=None, shared_pickup=None):
     require_role(actor, "client")
     if not actor.organization_id:
         raise PermissionDenied
     form = BookingForm(data, allow_zone_classification=True)
     if not form.is_valid():
-        raise ValidationError("Please correct the delivery details.")
+        raise ValidationError(f"Please correct the delivery details: {form.errors.as_text()}")
     values = form.cleaned_data
     # Serializes repeated create requests from one account, even before a job row exists.
     User.objects.select_for_update().get(pk=actor.pk)
@@ -145,6 +145,12 @@ def save_booking(*, actor, data, delivery_id=None):
         if values["revision"] != job.revision:
             raise ValidationError("This delivery has changed. Reload it before editing.")
         job.revision += 1
+        if job.bulk_booking_id:
+            from .models import BulkBooking
+
+            BulkBooking.objects.select_for_update().filter(pk=job.bulk_booking_id).update(
+                quote_ready_notified=False
+            )
         job.save(update_fields=["revision"])
     else:
         existing = Job.objects.filter(booking_key=values["booking_key"]).first()
@@ -155,6 +161,8 @@ def save_booking(*, actor, data, delivery_id=None):
         job = Job.objects.create(
             organization_id=actor.organization_id,
             created_by=actor,
+            is_bulk=bulk_booking is not None,
+            bulk_booking=bulk_booking,
             booking_key=values["booking_key"],
             revision=1,
         )
@@ -163,6 +171,9 @@ def save_booking(*, actor, data, delivery_id=None):
     from .locations import booking_location
 
     for prefix in ("pickup", "destination"):
+        if prefix == "pickup" and shared_pickup is not None:
+            delivery.pickup = shared_pickup
+            continue
         location = booking_location(actor, values, prefix)
         setattr(delivery, prefix, location)
     for name in (
