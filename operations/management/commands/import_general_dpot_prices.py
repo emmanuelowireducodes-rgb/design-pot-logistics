@@ -21,9 +21,11 @@ class Command(BaseCommand):
         self.stdout.write(f"DEBUG: {'ON' if settings.DEBUG else 'OFF'}")
         if connection.vendor not in {"sqlite", "postgresql"}:
             raise CommandError("Unsupported database engine; no changes made.")
-        if options["apply"] and (connection.vendor != "postgresql" or not settings.PRODUCTION):
+        if options["apply"] and (
+            connection.vendor != "postgresql" or not settings.PRODUCTION or settings.DEBUG
+        ):
             raise CommandError(
-                "Apply is restricted to DPOT_ENV=production on PostgreSQL; no changes made."
+                "Apply requires PostgreSQL, DPOT_ENV=production and DEBUG=False; no changes made."
             )
         try:
             preview = preview_general_dpot()

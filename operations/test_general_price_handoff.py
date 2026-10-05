@@ -1,5 +1,6 @@
 import uuid
 from io import StringIO
+from unittest.mock import patch
 
 from django.core.management import CommandError, call_command
 from django.test import TestCase
@@ -71,6 +72,14 @@ class GeneralPriceHandoffTests(TestCase):
         with self.assertRaises(CommandError):
             call_command("import_general_dpot_prices", apply=True, actor=self.admin.username)
         self.assertEqual(FixedRate.objects.count(), before)
+
+    @patch("operations.management.commands.import_general_dpot_prices.connection.vendor", "postgresql")
+    def test_production_command_refuses_apply_when_debug_is_enabled(self):
+        from django.test import override_settings
+
+        with override_settings(PRODUCTION=True, DEBUG=True):
+            with self.assertRaises(CommandError):
+                call_command("import_general_dpot_prices", apply=True, actor=self.admin.username)
 
     def test_general_price_card_page_renders_prices_without_bulk_links(self):
         self.client.force_login(self.admin)
