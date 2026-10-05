@@ -573,12 +573,41 @@ class LoginAttempt(models.Model):
 
 class OperationalZone(Record):
     name = models.CharField(max_length=100, unique=True)
+    normalized_name = models.CharField(max_length=200, unique=True, editable=False)
+    region = models.CharField(max_length=100, blank=True)
+    district = models.CharField(max_length=100, blank=True)
     active = models.BooleanField(default=True)
     # Optional GeoJSON-style ring of [longitude, latitude]; empty means Admin assignment only.
     boundary = models.JSONField(default=list, blank=True)
 
+    def save(self, *args, **kwargs):
+        from .area_directory import normalize_name
+
+        self.normalized_name = normalize_name(self.name)
+        if kwargs.get("update_fields") and "name" in kwargs["update_fields"]:
+            kwargs["update_fields"] = set(kwargs["update_fields"]) | {"normalized_name"}
+        return super().save(*args, **kwargs)
+
+    def clean(self):
+        from .area_directory import normalize_name, validate_identity
+
+        self.normalized_name = normalize_name(self.name)
+        validate_identity(self.name, zone_id=self.pk)
+
     def __str__(self):
         return self.name
+
+
+class AreaAlias(models.Model):
+    zone = models.ForeignKey(OperationalZone, on_delete=models.CASCADE, related_name="aliases")
+    name = models.CharField(max_length=100)
+    normalized_name = models.CharField(max_length=200, unique=True, editable=False)
+
+    def save(self, *args, **kwargs):
+        from .area_directory import normalize_name
+
+        self.normalized_name = normalize_name(self.name)
+        return super().save(*args, **kwargs)
 
 
 class PriceCard(Record):

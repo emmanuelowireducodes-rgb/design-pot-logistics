@@ -128,21 +128,33 @@ def booking_location(actor, values, prefix):
 
 
 @transaction.atomic
-def save_zone(*, actor, name, active, boundary, zone_id=None):
+def save_zone(*, actor, name, active, boundary, zone_id=None, region="", district="", aliases=None):
     if actor.role != "admin" or not actor.is_active:
         raise PermissionDenied
     boundary = validate_boundary(boundary)
+    from .area_directory import normalize_name, validate_identity
+    from .models import AreaAlias, User
+
+    list(User.objects.select_for_update().filter(role="admin", is_active=True).order_by("pk"))
     zone = (
         OperationalZone.objects.select_for_update().get(pk=zone_id)
         if zone_id
         else OperationalZone()
     )
+    alias_names = aliases if aliases is not None else list(zone.aliases.values_list("name", flat=True)) if zone_id else []
+    validate_identity(name, alias_names, zone.pk)
     before = (
         {"name": zone.name, "active": zone.active, "boundary": zone.boundary} if zone_id else None
     )
     zone.name, zone.active, zone.boundary = name, active, boundary
+    zone.region, zone.district = region, district
+    zone.normalized_name = normalize_name(name)
     zone.full_clean()
     zone.save()
+    if aliases is not None:
+        zone.aliases.all().delete()
+        for alias in alias_names:
+            AreaAlias.objects.create(zone=zone, name=alias)
     emit_event(
         actor=actor,
         kind="zone.updated",
@@ -152,7 +164,8 @@ def save_zone(*, actor, name, active, boundary, zone_id=None):
         payload={
             "zone_id": str(zone.pk),
             "before": before,
-            "after": {"name": name, "active": active, "boundary": boundary},
+            "after": {"name": name, "active": active, "boundary": boundary,
+                      "region": region, "district": district, "aliases": alias_names},
         },
     )
     return zone
