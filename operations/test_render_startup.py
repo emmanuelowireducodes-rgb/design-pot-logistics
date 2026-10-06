@@ -35,11 +35,6 @@ class RenderStartupTests(SimpleTestCase):
                     cwd=render_startup.PROJECT_ROOT,
                     check=True,
                 ),
-                call(
-                    [sys.executable, "manage.py", "diagnose_general_fixedrate_extras"],
-                    cwd=render_startup.PROJECT_ROOT,
-                    check=True,
-                ),
             ],
         )
         for command in run.call_args_list:
@@ -57,10 +52,10 @@ class RenderStartupTests(SimpleTestCase):
             patch("render_startup.os.execvp", side_effect=lambda *args: order.append("web")),
         ):
             render_startup.run_startup(["gunicorn", "config.wsgi:application"])
-        self.assertEqual(order, ["preview", "preview", "preview", "preview", "web"])
+        self.assertEqual(order, ["preview", "preview", "preview", "web"])
 
     def test_failed_pre_start_command_never_starts_web_server(self):
-        for failure_index in range(4):
+        for failure_index in range(3):
             with self.subTest(failure_index=failure_index):
                 results = [None] * failure_index + [subprocess.CalledProcessError(1, "preview")]
                 with (
