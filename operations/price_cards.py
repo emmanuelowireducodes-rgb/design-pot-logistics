@@ -1,13 +1,15 @@
 """Append-only commercial terms, explicit matching and auditable administration."""
 
 import uuid
+from dataclasses import dataclass
+from decimal import Decimal
 
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.db.models import F, OuterRef, Q, Subquery
 from django.utils import timezone
 
-from .models import FixedRate, OperationalZone, PriceCard, PricingConfiguration, User
+from .models import BandRate, FixedRate, OperationalZone, PriceCard, PricingConfiguration, User
 from .services import emit_event
 
 
@@ -25,7 +27,7 @@ def current_rates():
     return FixedRate.objects.annotate(latest_id=Subquery(latest)).filter(pk=F("latest_id"))
 
 
-def matching_rate(delivery, organization):
+def matching_rate(delivery, organization, *, service=None):
     origin, destination = delivery.pickup.zone_id, delivery.destination.zone_id
     if not origin or not destination:
         return None
@@ -39,7 +41,7 @@ def matching_rate(delivery, organization):
             origin__active=True,
             destination__active=True,
             vehicle=delivery.vehicle_type,
-            service=delivery.service,
+            service=service or delivery.service,
             effective_at__lte=now,
         )
         .filter(Q(expires_at__isnull=True) | Q(expires_at__gt=now))
@@ -52,6 +54,108 @@ def matching_rate(delivery, organization):
     if len(matches) > 1:
         raise ValidationError("Overlapping price-card terms need Admin review.")
     return matches[0] if matches else None
+
+
+@dataclass(frozen=True)
+class StandardPriceResolution:
+    amount: Decimal
+    source: str
+    fixed_rate: FixedRate | None = None
+    band_rate: BandRate | None = None
+
+    def snapshot(self):
+        result = {"source": self.source, "amount": str(self.amount)}
+        if self.fixed_rate:
+            result.update(
+                rate_id=str(self.fixed_rate.pk),
+                rate_key=str(self.fixed_rate.rate_key),
+                rate_version=self.fixed_rate.version,
+                card_id=str(self.fixed_rate.card_id),
+                origin_zone=self.fixed_rate.origin.name,
+                destination_zone=self.fixed_rate.destination.name,
+            )
+        if self.band_rate:
+            result.update(
+                band_rate_id=self.band_rate.pk,
+                origin_band=self.band_rate.origin.name,
+                destination_band=self.band_rate.destination.name,
+                vehicle=self.band_rate.vehicle,
+                bidirectional=self.band_rate.bidirectional,
+            )
+        return result
+
+
+def matching_band_rate(delivery, organization=None):
+    origin_id = getattr(delivery.pickup, "zone_id", None)
+    destination_id = getattr(delivery.destination, "zone_id", None)
+    if not origin_id or not destination_id:
+        return None
+    origin_band = (
+        OperationalZone.objects.filter(pk=origin_id, active=True, pricing_band__active=True)
+        .values_list("pricing_band_id", flat=True)
+        .first()
+    )
+    destination_band = (
+        OperationalZone.objects.filter(pk=destination_id, active=True, pricing_band__active=True)
+        .values_list("pricing_band_id", flat=True)
+        .first()
+    )
+    if not origin_band or not destination_band:
+        return None
+    scope_key = f"client:{organization.pk}" if organization else "general"
+    candidates = BandRate.objects.filter(
+        scope_key=scope_key,
+        active=True,
+        vehicle=delivery.vehicle_type,
+        origin__active=True,
+        destination__active=True,
+    )
+    exact_direction = list(
+        candidates.filter(
+            bidirectional=False, origin_id=origin_band, destination_id=destination_band
+        ).select_related("origin", "destination")[:2]
+    )
+    if len(exact_direction) > 1:
+        raise ValidationError("Duplicate directional band rates need Admin review.")
+    if exact_direction:
+        return exact_direction[0]
+    symmetric = list(
+        candidates.filter(
+            bidirectional=True,
+        )
+        .filter(
+            Q(origin_id=origin_band, destination_id=destination_band)
+            | Q(origin_id=destination_band, destination_id=origin_band)
+        )
+        .select_related("origin", "destination")[:2]
+    )
+    if len(symmetric) > 1:
+        raise ValidationError("Overlapping symmetric band rates need Admin review.")
+    return symmetric[0] if symmetric else None
+
+
+def resolve_standard_price(delivery, organization):
+    """Resolve one Standard price in the approved exact-then-matrix scope order."""
+    custom = bool(organization and organization.use_custom_pricing)
+    if custom:
+        client_rate = matching_rate(delivery, organization, service="standard")
+        if client_rate:
+            return StandardPriceResolution(
+                client_rate.amount, "client_exact", fixed_rate=client_rate
+            )
+    general_rate = matching_rate(delivery, None, service="standard")
+    if general_rate:
+        return StandardPriceResolution(
+            general_rate.amount, "general_exact", fixed_rate=general_rate
+        )
+    if custom:
+        client_band = matching_band_rate(delivery, organization)
+        if client_band:
+            return StandardPriceResolution(client_band.amount, "client_band", band_rate=client_band)
+    general_band = matching_band_rate(delivery, None)
+    if general_band:
+        return StandardPriceResolution(general_band.amount, "general_band", band_rate=general_band)
+    return None
 
 
 @transaction.atomic
@@ -72,6 +176,9 @@ def save_card(*, actor, name, organization=None, active=True, card_id=None):
     card.scope_key = f"client:{organization.pk}" if organization else "general"
     card.full_clean()
     card.save()
+    if organization and not organization.use_custom_pricing:
+        organization.use_custom_pricing = True
+        organization.save(update_fields=["use_custom_pricing"])
     emit_event(
         actor=actor,
         kind="pricing.card_saved",
@@ -222,8 +329,8 @@ def save_route_price(
                     actor=actor, card_id=card.pk, rate_key=previous.rate_key,
                     expected_version=previous.version, origin=origin, destination=destination,
                     vehicle=vehicle, service=service, amount=previous.amount,
-                    bidirectional=bidirectional, active=False,
-                    effective_at=effective_at, expires_at=expires_at, reason=reason,
+                    bidirectional=bidirectional, active=False, effective_at=effective_at,
+                    expires_at=expires_at, reason=reason,
                 )
             continue
         save_rate(

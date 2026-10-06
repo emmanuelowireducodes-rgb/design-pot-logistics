@@ -1,9 +1,17 @@
+from decimal import Decimal
 from typing import Any, cast
 
 from django import forms
 from django.utils import timezone
 
-from .models import Delivery, OperationalZone, Organization, PricingConfiguration, Resource
+from .models import (
+    Delivery,
+    OperationalZone,
+    Organization,
+    PremiumPricingRule,
+    PricingConfiguration,
+    Resource,
+)
 
 
 class ZoneForm(forms.Form):
@@ -24,6 +32,138 @@ class CardForm(forms.Form):
         empty_label="General price card",
     )
     active = forms.BooleanField(required=False, initial=True)
+
+
+class OrganizationPricingForm(forms.Form):
+    use_custom_pricing = forms.ChoiceField(
+        label="Pricing source",
+        choices=[
+            ("general", "Use General Dpot Pricing — default Dpot delivery rates"),
+            ("custom", "Use Custom Client Pricing — client rates, then General fallback"),
+        ],
+        widget=forms.RadioSelect,
+    )
+    premium_rule_source = forms.ChoiceField(
+        label="Premium rule",
+        choices=[
+            ("general", "Use General Premium Rule"),
+            ("custom", "Use Custom Premium Rule"),
+        ],
+    )
+    premium_enabled = forms.BooleanField(label="Premium pricing enabled", required=False)
+    premium_method = forms.ChoiceField(
+        label="Adjustment method",
+        choices=PremiumPricingRule.Method.choices,
+    )
+    premium_value = forms.DecimalField(
+        label="Percentage or GHS amount",
+        min_value=0,
+        max_digits=8,
+        decimal_places=2,
+        help_text="Percentage is limited to 500%. Fixed amounts are in GHS.",
+    )
+
+    def __init__(self, *args, organization, **kwargs):
+        self.organization = organization
+        super().__init__(*args, **kwargs)
+        rule = PremiumPricingRule.objects.filter(organization=organization).first()
+        self.initial.setdefault(
+            "use_custom_pricing",
+            "custom" if organization.use_custom_pricing else "general",
+        )
+        self.initial.setdefault("premium_rule_source", organization.premium_rule_source)
+        self.initial.setdefault("premium_enabled", rule.enabled if rule else False)
+        self.initial.setdefault(
+            "premium_method",
+            rule.method if rule else PremiumPricingRule.Method.PERCENTAGE,
+        )
+        self.initial.setdefault("premium_value", rule.value if rule else Decimal("0.00"))
+
+    def clean(self):
+        cleaned = super().clean()
+        value = cleaned.get("premium_value")
+        if cleaned.get("premium_enabled") and value is not None and value <= 0:
+            self.add_error("premium_value", "Enabled Premium pricing requires a positive uplift.")
+        if (
+            cleaned.get("premium_method") == PremiumPricingRule.Method.PERCENTAGE
+            and cleaned.get("premium_value", Decimal("0")) > Decimal("500")
+        ):
+            self.add_error("premium_value", "Percentage uplift cannot exceed 500%.")
+        return cleaned
+
+    def save(self):
+        self.organization.use_custom_pricing = (
+            self.cleaned_data["use_custom_pricing"] == "custom"
+        )
+        self.organization.premium_rule_source = self.cleaned_data["premium_rule_source"]
+        self.organization.save(
+            update_fields=["use_custom_pricing", "premium_rule_source"]
+        )
+        if self.organization.premium_rule_source == "custom":
+            PremiumPricingRule.objects.update_or_create(
+                scope_key=f"client:{self.organization.pk}",
+                defaults={
+                    "organization": self.organization,
+                    "enabled": self.cleaned_data["premium_enabled"],
+                    "method": self.cleaned_data["premium_method"],
+                    "value": self.cleaned_data["premium_value"],
+                },
+            )
+        return self.organization
+
+
+class PremiumRuleForm(forms.Form):
+    enabled = forms.BooleanField(label="Premium pricing enabled", required=False)
+    method = forms.ChoiceField(
+        label="Adjustment method",
+        choices=PremiumPricingRule.Method.choices,
+        widget=forms.RadioSelect,
+    )
+    value = forms.DecimalField(
+        label="Percentage or GHS amount",
+        min_value=0,
+        max_digits=8,
+        decimal_places=2,
+        help_text="Percentage uplift is limited to 500%; fixed amounts are in GHS.",
+    )
+
+    def __init__(self, *args, rule=None, **kwargs):
+        self.rule = rule
+        initial = kwargs.setdefault("initial", {})
+        if rule and not args and "data" not in kwargs:
+            initial.update(
+                enabled=rule.enabled,
+                method=rule.method,
+                value=rule.value,
+            )
+        else:
+            initial.setdefault("enabled", False)
+            initial.setdefault("method", PremiumPricingRule.Method.PERCENTAGE)
+            initial.setdefault("value", Decimal("0.00"))
+        super().__init__(*args, **kwargs)
+
+    def clean(self):
+        cleaned = super().clean()
+        value = cleaned.get("value")
+        if cleaned.get("enabled") and value is not None and value <= 0:
+            self.add_error("value", "Enabled Premium pricing requires a positive uplift.")
+        if (
+            cleaned.get("method") == PremiumPricingRule.Method.PERCENTAGE
+            and cleaned.get("value", Decimal("0")) > Decimal("500")
+        ):
+            self.add_error("value", "Percentage uplift cannot exceed 500%.")
+        return cleaned
+
+    def save(self):
+        return PremiumPricingRule.objects.update_or_create(
+            scope_key="general",
+            defaults={
+                "organization": None,
+                "enabled": self.cleaned_data["enabled"],
+                "method": self.cleaned_data["method"],
+                "value": self.cleaned_data["value"],
+            },
+        )[0]
 
 
 class RateForm(forms.Form):
@@ -84,6 +224,13 @@ class RoutePriceForm(forms.Form):
         widget=forms.DateTimeInput(attrs={"type": "datetime-local"}, format="%Y-%m-%dT%H:%M"),
     )
     reason = forms.CharField(max_length=500, required=False)
+    selected_zones = forms.ModelMultipleChoiceField(
+        label="Import Existing Zones",
+        queryset=OperationalZone.objects.filter(active=True).order_by("name"),
+        required=False,
+        widget=forms.CheckboxSelectMultiple,
+        help_text="Select existing active areas to make them easy to choose below. This reuses directory entries and creates no areas.",
+    )
 
     def clean(self):
         cleaned = super().clean() or {}

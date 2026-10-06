@@ -4,7 +4,7 @@ import hashlib
 import json
 import uuid
 from datetime import timedelta
-from decimal import ROUND_CEILING, Decimal
+from decimal import ROUND_CEILING, ROUND_HALF_UP, Decimal
 from typing import Protocol
 
 from django.conf import settings
@@ -149,11 +149,21 @@ def delivery_snapshot(delivery):
 
 
 def priced_quote(delivery, *, amount, source, rules, mode, rate=None, actor=None):
+    # Version identity follows the immutable pricing snapshot, not a mutable
+    # matrix row or job ID. Identical automatic calculations can share a version.
+    version_rules = {
+        **rules,
+        "source": source,
+        "amount": str(amount),
+        "currency": "GHS",
+        "general_mode": mode,
+    }
+    digest = hashlib.sha256(
+        json.dumps(version_rules, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
     version, _ = PricingVersion.objects.get_or_create(
-        label=f"{source.lower()}-{rate.pk if rate else delivery.job_id}"
-        if not actor
-        else f"manual-{uuid.uuid4()}",
-        defaults={"rules": rules, "currency": "GHS", "is_sample": False},
+        label=f"priced-{digest}" if not actor else f"manual-{uuid.uuid4()}",
+        defaults={"rules": version_rules, "currency": "GHS", "is_sample": False},
     )
     quote = Quote.objects.create(
         job=delivery.job,
@@ -174,6 +184,8 @@ def priced_quote(delivery, *, amount, source, rules, mode, rate=None, actor=None
             "adjustments": [],
             "distance_km": None,
             "admin_actor": actor.pk if actor else None,
+            "premium_calculation": rules.get("premium_calculation"),
+            "standard_resolution": rules.get("standard_resolution"),
         },
     )
     delivery.job.current_quote = quote
@@ -182,23 +194,81 @@ def priced_quote(delivery, *, amount, source, rules, mode, rate=None, actor=None
     return quote
 
 
+def calculate_premium(standard_amount, *, method, value):
+    """Apply an uplift and round the final GHS amount to cents, half up."""
+    standard = Decimal(str(standard_amount))
+    uplift = Decimal(str(value))
+    if not standard.is_finite() or standard < 0 or not uplift.is_finite() or uplift <= 0:
+        raise ValidationError("Premium requires a positive adjustment and a valid Standard price.")
+    if method == "percentage":
+        if uplift > Decimal("500"):
+            raise ValidationError("Percentage uplift cannot exceed 500%.")
+        adjustment = standard * uplift / Decimal("100")
+    elif method == "fixed":
+        adjustment = uplift
+    else:
+        raise ValidationError("Unknown Premium adjustment method.")
+    adjustment = adjustment.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    if adjustment <= 0:
+        raise ValidationError("Premium adjustment must round to at least GHS 0.01.")
+    total = (standard + adjustment).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    if total > Decimal("9999999999.99"):
+        raise ValidationError("Premium price exceeds the supported quote amount.")
+    return adjustment, total
+
+
 def prepare_quote(delivery, distance_provider=None):
-    """Resolve client terms, then general cards; unmatched routes need Admin review."""
+    """Resolve exact then band Standard pricing; unmatched routes need Admin review."""
     from .models import User
-    from .price_cards import matching_rate
+    from .price_cards import resolve_standard_price
     from .services import emit_event
 
-    contract = matching_rate(delivery, delivery.job.organization)
-    rate = contract or matching_rate(delivery, None)
-    if rate:
-        return priced_quote(
-            delivery,
-            amount=rate.amount,
-            source="CLIENT_CONTRACT_RATE" if contract else "GENERAL_FIXED_RATE",
-            rules={"rate_id": str(rate.pk), "amount": str(rate.amount)},
-            mode="PRICE_CARD",
-            rate=rate,
-        )
+    organization = delivery.job.organization
+    resolution = resolve_standard_price(delivery, organization)
+    if resolution:
+        amount = resolution.amount
+        quote_rules = {"standard_resolution": resolution.snapshot()}
+        if delivery.service == "premium":
+            from .models import PremiumPricingRule
+
+            if organization.premium_rule_source == "custom":
+                rule = PremiumPricingRule.objects.filter(organization=organization).first()
+            else:
+                rule = PremiumPricingRule.objects.filter(organization__isnull=True).first()
+            if not rule or not rule.enabled:
+                resolution = None
+            else:
+                try:
+                    adjustment, amount = calculate_premium(
+                        resolution.amount, method=rule.method, value=rule.value
+                    )
+                except ValidationError:
+                    resolution = None
+                else:
+                    quote_rules["premium_calculation"] = {
+                        "standard_amount": str(resolution.amount),
+                        "method": rule.method,
+                        "value": str(rule.value),
+                        "adjustment": str(adjustment),
+                        "premium_amount": str(amount),
+                        "rule_scope": "custom" if rule.organization_id else "general",
+                        "rule_id": str(rule.pk),
+                    }
+        if resolution:
+            source = {
+                "client_exact": "CLIENT_CONTRACT_RATE",
+                "general_exact": "GENERAL_FIXED_RATE",
+                "client_band": "CLIENT_BAND_RATE",
+                "general_band": "GENERAL_BAND_RATE",
+            }[resolution.source]
+            return priced_quote(
+                delivery,
+                amount=amount,
+                source=source,
+                rules=quote_rules,
+                mode="PRICE_CARD",
+                rate=resolution.fixed_rate,
+            )
     delivery.job.current_quote = None
     delivery.job.quote_requested = True
     delivery.job.save(update_fields=["current_quote", "quote_requested"])
@@ -249,10 +319,17 @@ def manual_quote(
     ):
         raise ValidationError("Enter a valid amount and a reason for the manual quote.")
     if save_as_price_card:
+        if delivery.service == "premium":
+            raise ValidationError(
+                "A Premium manual quote cannot be saved as a Standard route rate. "
+                "Configure the Premium adjustment instead."
+            )
         if card_scope not in ("general", "client"):
             raise ValidationError("Choose a valid Price Card scope.")
         if not delivery.pickup.zone_id or not delivery.destination.zone_id:
-            raise ValidationError("Assign both pricing areas before saving this route to Price Cards.")
+            raise ValidationError(
+                "Assign both pricing areas before saving this route to Price Cards."
+            )
         from . import price_cards
 
         organization = job.organization if card_scope == "client" else None

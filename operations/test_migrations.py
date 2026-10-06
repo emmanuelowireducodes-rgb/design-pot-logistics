@@ -62,3 +62,29 @@ class ClientMapsMigrationTests(TransactionTestCase):
                 for table in tables:
                     for action in ("update", "delete"):
                         self.assertIn(f"immutable_{table}_{action}", found)
+
+class PricingBandsMigrationTests(TransactionTestCase):
+    reset_sequences = True
+
+    def test_existing_zones_gain_nullable_band_without_seed_rates(self):
+        executor = MigrationExecutor(connection)
+        latest_targets = executor.loader.graph.leaf_nodes()
+        executor.migrate([("operations", "0018_premiumpricingrule_premium_rule_nonnegative_and_more")])
+        try:
+            old_apps = MigrationExecutor(connection).loader.project_state(
+                [("operations", "0018_premiumpricingrule_premium_rule_nonnegative_and_more")]
+            ).apps
+            OldZone = old_apps.get_model("operations", "OperationalZone")
+            zone = OldZone.objects.create(name="Migration Check Zone", normalized_name="migration check zone")
+
+            executor = MigrationExecutor(connection)
+            executor.migrate([("operations", "0019_pricing_bands")])
+            new_apps = MigrationExecutor(connection).loader.project_state(
+                [("operations", "0019_pricing_bands")]
+            ).apps
+            NewZone = new_apps.get_model("operations", "OperationalZone")
+            BandRate = new_apps.get_model("operations", "BandRate")
+            self.assertIsNone(NewZone.objects.get(pk=zone.pk).pricing_band_id)
+            self.assertEqual(BandRate.objects.count(), 0)
+        finally:
+            MigrationExecutor(connection).migrate(latest_targets)

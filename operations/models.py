@@ -12,6 +12,12 @@ from .validators import validate_google_maps_link
 
 class Organization(models.Model):
     name = models.CharField(max_length=160)
+    use_custom_pricing = models.BooleanField(default=False)
+    premium_rule_source = models.CharField(
+        max_length=8,
+        choices=[("general", "General"), ("custom", "Custom")],
+        default="general",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
@@ -245,7 +251,9 @@ class Quote(AppendOnly):
     def source_label(self):
         return {
             "CLIENT_CONTRACT_RATE": "Client contract rate",
-            "GENERAL_FIXED_RATE": "General fixed rate",
+            "GENERAL_FIXED_RATE": "General exact route",
+            "CLIENT_BAND_RATE": "Client band price",
+            "GENERAL_BAND_RATE": "General band price",
             "GENERAL_DISTANCE_RATE": "General distance rate",
             "ADMIN_MANUAL_QUOTE": "Admin manual quote",
         }.get(self.source, self.source)
@@ -579,6 +587,9 @@ class OperationalZone(Record):
     active = models.BooleanField(default=True)
     # Optional GeoJSON-style ring of [longitude, latitude]; empty means Admin assignment only.
     boundary = models.JSONField(default=list, blank=True)
+    pricing_band = models.ForeignKey(
+        "PricingBand", null=True, blank=True, on_delete=models.SET_NULL, related_name="zones"
+    )
 
     def save(self, *args, **kwargs):
         from .area_directory import normalize_name
@@ -620,6 +631,147 @@ class PriceCard(Record):
 
     def __str__(self):
         return self.name
+
+
+class PricingBand(Record):
+    name = models.CharField(max_length=100, unique=True)
+    active = models.BooleanField(default=True)
+    display_order = models.PositiveSmallIntegerField(default=0)
+
+    class Meta:
+        ordering = ["display_order", "name", "pk"]
+
+    def __str__(self):
+        return self.name
+
+
+class BandRate(models.Model):
+    class Vehicle(models.TextChoices):
+        BIKE = "bike", "Bike"
+        CAR = "car", "Car"
+
+    scope_key = models.CharField(max_length=80, editable=False)
+    organization = models.ForeignKey(
+        Organization,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="band_rates",
+    )
+    origin = models.ForeignKey(
+        PricingBand, on_delete=models.PROTECT, related_name="origin_band_rates"
+    )
+    destination = models.ForeignKey(
+        PricingBand, on_delete=models.PROTECT, related_name="destination_band_rates"
+    )
+    vehicle = models.CharField(max_length=4, choices=Vehicle.choices)
+    amount = models.DecimalField(
+        max_digits=12, decimal_places=2, validators=[MinValueValidator(0.01)]
+    )
+    bidirectional = models.BooleanField(default=False)
+    active = models.BooleanField(default=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["scope_key", "origin", "destination", "vehicle"],
+                condition=Q(bidirectional=False),
+                name="unique_directional_band_rate",
+            ),
+            models.UniqueConstraint(
+                fields=["scope_key", "origin", "destination", "vehicle"],
+                condition=Q(bidirectional=True),
+                name="unique_symmetric_band_rate",
+            ),
+            models.CheckConstraint(condition=Q(amount__gt=0), name="band_rate_positive"),
+        ]
+        indexes = [models.Index(fields=["scope_key", "vehicle", "active"])]
+
+    def clean(self):
+        super().clean()
+        self.scope_key = f"client:{self.organization_id}" if self.organization_id else "general"
+        if self.bidirectional and self.origin_id and self.destination_id:
+            if str(self.destination_id) < str(self.origin_id):
+                self.origin, self.destination = self.destination, self.origin
+        if (
+            not self.active
+            or not self.bidirectional
+            or not self.origin_id
+            or not self.destination_id
+        ):
+            return
+        others = (
+            BandRate.objects.filter(
+                scope_key=self.scope_key, vehicle=self.vehicle, active=True, bidirectional=True
+            )
+            .exclude(pk=self.pk)
+            .filter(
+                Q(origin_id=self.origin_id, destination_id=self.destination_id)
+                | Q(origin_id=self.destination_id, destination_id=self.origin_id)
+            )
+        )
+        if others.exists():
+            raise ValidationError("A symmetric rate already exists for this band pair.")
+
+    def save(self, *args, **kwargs):
+        self.scope_key = f"client:{self.organization_id}" if self.organization_id else "general"
+        if self.bidirectional and self.origin_id and self.destination_id:
+            if str(self.destination_id) < str(self.origin_id):
+                self.origin, self.destination = self.destination, self.origin
+        return super().save(*args, **kwargs)
+
+
+class PremiumPricingRule(models.Model):
+    class Method(models.TextChoices):
+        PERCENTAGE = "percentage", "Percentage"
+        FIXED = "fixed", "Fixed amount"
+
+    scope_key = models.CharField(max_length=80, unique=True, editable=False)
+    organization = models.OneToOneField(
+        Organization,
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="premium_pricing_rule",
+    )
+    enabled = models.BooleanField(default=False)
+    method = models.CharField(
+        max_length=12,
+        choices=Method.choices,
+        default=Method.PERCENTAGE,
+    )
+    value = models.DecimalField(
+        max_digits=8,
+        decimal_places=2,
+        default=0,
+        validators=[MinValueValidator(0)],
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(value__gte=0),
+                name="premium_rule_nonnegative",
+            ),
+            models.CheckConstraint(
+                condition=~Q(method="percentage") | Q(value__lte=500),
+                name="premium_rule_percentage_max",
+            ),
+        ]
+
+    def save(self, *args, **kwargs):
+        self.scope_key = f"client:{self.organization_id}" if self.organization_id else "general"
+        return super().save(*args, **kwargs)
+
+    def clean(self):
+        super().clean()
+        self.scope_key = f"client:{self.organization_id}" if self.organization_id else "general"
+        if self.enabled and self.value <= 0:
+            raise ValidationError({"value": "Enabled Premium pricing requires a positive uplift."})
+        if self.method == self.Method.PERCENTAGE and self.value > 500:
+            raise ValidationError({"value": "Percentage uplift cannot exceed 500%."})
 
 
 class FixedRate(AppendOnly):

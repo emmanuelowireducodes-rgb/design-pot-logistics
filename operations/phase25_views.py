@@ -2,6 +2,7 @@ import json
 import uuid
 from pathlib import Path
 
+from django import forms
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
@@ -21,12 +22,16 @@ from .models import (
     DomainEvent,
     FixedRate,
     OperationalZone,
+    Organization,
+    PremiumPricingRule,
     PriceCard,
 )
 from .operational_views import errors
 from .phase25_forms import (
     CardForm,
     ManualQuoteForm,
+    OrganizationPricingForm,
+    PremiumRuleForm,
     RateForm,
     RoutePriceForm,
     ZoneAssignmentForm,
@@ -62,6 +67,56 @@ def pricing_home(request):
 
 @roles_required("admin")
 def cards(request):
+    organizations = Organization.objects.order_by("name")
+    pricing_form = None
+    general_rule = PremiumPricingRule.objects.filter(organization__isnull=True).first()
+    general_premium_form = None
+    if request.method == "POST":
+        if request.POST.get("action") == "save_general_premium_rule":
+            general_premium_form = PremiumRuleForm(request.POST, rule=general_rule)
+            if general_premium_form.is_valid():
+                general_premium_form.save()
+                messages.success(request, "General Premium pricing rule saved.")
+                return redirect("cards")
+        else:
+            organization = get_object_or_404(
+                Organization, pk=request.POST.get("organization_id")
+            )
+            pricing_form = OrganizationPricingForm(request.POST, organization=organization)
+            if any(name not in request.POST for name in pricing_form.initial):
+                pricing_data = request.POST.copy()
+                for name, value in pricing_form.initial.items():
+                    if not isinstance(pricing_form.fields[name], forms.BooleanField):
+                        pricing_data.setdefault(name, value)
+                pricing_form = OrganizationPricingForm(
+                    pricing_data, organization=organization
+                )
+            if pricing_form.is_valid():
+                pricing_form.save()
+                messages.success(request, f"{organization.name} pricing source updated.")
+                return redirect("cards")
+    if general_premium_form is None:
+        general_premium_form = PremiumRuleForm(rule=general_rule)
+    if general_premium_form.is_bound and general_premium_form.is_valid():
+        premium_enabled = general_premium_form.cleaned_data["enabled"]
+        premium_method = general_premium_form.cleaned_data["method"]
+        premium_value = general_premium_form.cleaned_data["value"]
+    else:
+        premium_enabled = general_rule.enabled if general_rule else False
+        premium_method = (
+            general_rule.method if general_rule else PremiumPricingRule.Method.PERCENTAGE
+        )
+        premium_value = general_rule.value if general_rule else 0
+    premium_preview = None
+    if premium_enabled:
+        try:
+            adjustment, total = pricing.calculate_premium(
+                50, method=premium_method, value=premium_value
+            )
+        except ValidationError:
+            pass
+        else:
+            premium_preview = {"standard": "50.00", "adjustment": adjustment, "total": total}
     query = PriceCard.objects.select_related("organization").order_by("name")
     q = request.GET.get("q", "")[:100]
     if q:
@@ -75,6 +130,11 @@ def cards(request):
             "q": q,
             "page_obj": Paginator(query, 20).get_page(request.GET.get("page")),
             "general_card": PriceCard.objects.filter(scope_key="general").first(),
+            "general_client_count": Organization.objects.filter(use_custom_pricing=False).count(),
+            "organizations": organizations,
+            "pricing_form": pricing_form,
+            "general_premium_form": general_premium_form,
+            "premium_preview": premium_preview,
         },
     )
 
@@ -88,14 +148,33 @@ def card_edit(request, card_id=None):
         else {}
     )
     form = CardForm(request.POST or None, initial=initial)
+    organization = card.organization if card else None
+    pricing_form = (
+        OrganizationPricingForm(
+            request.POST if request.method == "POST" else None,
+            organization=organization,
+        )
+        if organization
+        else None
+    )
+    if pricing_form and request.method == "POST":
+        pricing_data = request.POST.copy()
+        for name, value in pricing_form.initial.items():
+            if not isinstance(pricing_form.fields[name], forms.BooleanField):
+                pricing_data.setdefault(name, value)
+        pricing_form = OrganizationPricingForm(pricing_data, organization=organization)
     if request.method == "POST" and form.is_valid():
-        try:
-            saved = price_cards.save_card(actor=request.user, card_id=card_id, **form.cleaned_data)
-            return redirect("card-rates", card_id=saved.pk)
-        except ValidationError as exc:
-            errors(form, exc)
+        if pricing_form is None or pricing_form.is_valid():
+            try:
+                saved = price_cards.save_card(actor=request.user, card_id=card_id, **form.cleaned_data)
+                if pricing_form:
+                    pricing_form.save()
+                return redirect("card-rates", card_id=saved.pk)
+            except ValidationError as exc:
+                errors(form, exc)
     return edit_page(
-        request, "Edit price card" if card else "Create price card", form, "/admin/pricing/cards/"
+        request, "Edit price card" if card else "Create price card", form, "/admin/pricing/cards/",
+        pricing_form=pricing_form, card=card,
     )
 
 
@@ -163,6 +242,14 @@ def route_price_edit(request, card_id, origin_id=None, destination_id=None):
             initial[f"{rate.vehicle}_price"] = rate.amount
             initial["active"] = rate.active
     form = RoutePriceForm(request.POST or None, initial=initial)
+    selected = form["selected_zones"].value()
+    if selected is None:
+        selected = list(
+            OperationalZone.objects.filter(active=True).values_list("pk", flat=True)
+        )
+    active_choices = OperationalZone.objects.filter(pk__in=selected, active=True).order_by("name")
+    form.fields["origin"].queryset = active_choices
+    form.fields["destination"].queryset = active_choices
     if request.method == "POST" and form.is_valid():
         try:
             data = form.cleaned_data
@@ -199,6 +286,7 @@ def route_price_edit(request, card_id, origin_id=None, destination_id=None):
         "title": "Edit route price" if editing else "Add route price",
         "section": "pricing", "form": form, "card": card, "editing": editing,
         "back": reverse("card-rates", args=[card.pk]), "existing_route_url": existing_route_url,
+        "active_zones": OperationalZone.objects.filter(active=True).order_by("name"),
     })
 
 
@@ -303,6 +391,11 @@ def manual_quote(request, delivery_id):
         form.fields["save_as_price_card"].disabled = True
         form.fields["save_as_price_card"].help_text = (
             "Both pricing areas are needed before this route can be saved. Correct the areas first."
+        )
+    if delivery.service == "premium":
+        form.fields["save_as_price_card"].disabled = True
+        form.fields["save_as_price_card"].help_text = (
+            "Premium is calculated from a Standard route using the configured Premium rule."
         )
     if request.method == "POST" and form.is_valid():
         try:

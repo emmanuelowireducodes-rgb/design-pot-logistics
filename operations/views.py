@@ -181,6 +181,11 @@ def page(request, portal, section):
                 ).count(),
             }
         elif portal == "client":
+            context["pricing_source_label"] = (
+                "Custom — General fallback enabled"
+                if request.user.organization and request.user.organization.use_custom_pricing
+                else "General Dpot Pricing"
+            )
             context["active_deliveries"] = deliveries.exclude(
                 status__in=["delivered", "cancelled"]
             ).order_by("-created_at")[:4]

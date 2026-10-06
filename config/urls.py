@@ -1,7 +1,15 @@
 from django.contrib.auth.views import LogoutView
 from django.urls import include, path
 
-from operations import bulk_views, finance_views, push, run_views, user_management, views
+from operations import (
+    bulk_views,
+    finance_views,
+    pricing_band_views,
+    push,
+    run_views,
+    user_management,
+    views,
+)
 from operations import operational_views as ops
 from operations import phase25_views as foundation
 
@@ -28,6 +36,8 @@ urlpatterns = [
     path("admin/zones/<uuid:zone_id>/", foundation.zone_edit, name="zone-edit"),
     path("admin/deliveries/<uuid:delivery_id>/zone/", foundation.assign_zone, name="assign-zone"),
     path("admin/pricing/", foundation.pricing_home, name="pricing"),
+    path("admin/pricing/bands/", pricing_band_views.pricing_bands_page, name="pricing-bands"),
+    path("admin/pricing/bands/matrix/", pricing_band_views.band_matrix, name="band-matrix"),
     path("admin/pricing/distance/", ops.pricing, name="distance-pricing"),
     path("admin/pricing/cards/", foundation.cards, name="cards"),
     path("admin/pricing/cards/new/", foundation.card_edit, name="card-create"),

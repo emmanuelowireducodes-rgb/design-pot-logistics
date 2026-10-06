@@ -23,6 +23,7 @@ from .models import (
     Notification,
     OperationalZone,
     Organization,
+    PremiumPricingRule,
     PriceCard,
     ProofOfDelivery,
     Quote,
@@ -69,11 +70,10 @@ class Phase2Tests(TestCase):
             bike_price=Decimal("20.00"), car_price=Decimal("50.00"),
             service="standard", bidirectional=True, reason="Test fixture rates",
         )
-        price_cards.save_route_price(
-            actor=cls.admin, card_id=cls.general_card.pk,
-            origin_id=cls.origin.pk, destination_id=cls.destination.pk,
-            bike_price=Decimal("30.00"), car_price=Decimal("50.00"),
-            service="premium", bidirectional=True, reason="Test fixture Premium rates",
+        PremiumPricingRule.objects.create(
+            enabled=True,
+            method=PremiumPricingRule.Method.FIXED,
+            value=Decimal("10.00"),
         )
         cls.rider = User.objects.create_user("rider2", role="rider", first_name="Kofi")
         cls.other_rider = User.objects.create_user("rider3", role="rider", first_name="Esi")
@@ -1148,7 +1148,7 @@ class Phase2Tests(TestCase):
         )
         delivery.refresh_from_db()
         self.assertEqual(delivery.status, "delivered")
-        self.assertEqual(delivery.job.current_quote.amount, Decimal("50.00"))
+        self.assertEqual(delivery.job.current_quote.amount, Decimal("60.00"))
 
     def test_operational_lists_do_not_query_per_delivery(self):
         self.assign(self.confirmed())

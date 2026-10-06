@@ -21,6 +21,7 @@ from .models import (
     Notification,
     OperationalZone,
     Organization,
+    PremiumPricingRule,
     Quote,
     Resource,
     User,
@@ -51,6 +52,11 @@ class Foundation25Tests(TestCase):
             "p25other", role="client", organization=cls.other_organization
         )
         cls.admin = User.objects.create_user("p25admin", role="admin")
+        PremiumPricingRule.objects.create(
+            enabled=True,
+            method=PremiumPricingRule.Method.PERCENTAGE,
+            value=Decimal("20.00"),
+        )
         cls.rider = User.objects.create_user("p25rider", role="rider")
         cls.bike = Resource.objects.create(
             user=cls.rider,
@@ -415,9 +421,9 @@ class Foundation25Tests(TestCase):
     def test_vehicle_and_service_specific_rates(self):
         self.mode()
         card = self.card()
+        self.rate(card, vehicle="bike", amount=Decimal("75"))
         self.rate(card, vehicle="car", amount=Decimal("100"))
-        self.rate(card, service="premium", amount=Decimal("90"))
-        self.assertIsNone(self.resolved().job.current_quote_id)
+        self.assertEqual(self.resolved().job.current_quote.amount, Decimal("75"))
         self.assertEqual(self.resolved(vehicle_type="car").job.current_quote.amount, Decimal("100"))
         now = timezone.now()
         self.assertEqual(
