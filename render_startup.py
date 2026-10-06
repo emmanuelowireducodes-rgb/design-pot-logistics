@@ -10,7 +10,6 @@ PRE_START_COMMANDS = (
     ("manage.py", "migrate", "--noinput"),
     ("manage.py", "import_general_dpot_prices"),
     ("manage.py", "apply_general_pricing_bands"),
-    ("pricing_band_startup.py",),
 )
 
 
