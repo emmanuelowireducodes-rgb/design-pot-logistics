@@ -31,7 +31,7 @@ class RenderStartupTests(SimpleTestCase):
                     check=True,
                 ),
                 call(
-                    [sys.executable, "pricing_band_startup.py"],
+                    [sys.executable, "manage.py", "apply_general_pricing_bands"],
                     cwd=render_startup.PROJECT_ROOT,
                     check=True,
                 ),
