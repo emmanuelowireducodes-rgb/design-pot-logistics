@@ -1,4 +1,4 @@
-"""Run migrations and a read-only pricing preview before the Render web command."""
+"""Run migrations and read-only pricing previews before the Render web command."""
 
 import os
 import subprocess
@@ -9,6 +9,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 PRE_START_COMMANDS = (
     ("manage.py", "migrate", "--noinput"),
     ("manage.py", "import_general_dpot_prices"),
+    ("manage.py", "apply_general_pricing_bands"),
 )
 
 
