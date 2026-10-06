@@ -43,9 +43,11 @@ def preview_rollout():
     unexpected = list(PricingBand.objects.exclude(name__in=names).values_list("name", flat=True))
     conflicts.extend(f"Unexpected PricingBand: {name}" for name in unexpected)
     assigned_ids = [item["zone"].pk for item in preview["zones"]["assignments"]]
-    if OperationalZone.objects.exclude(pk__in=assigned_ids).filter(
-        pricing_band__isnull=False
-    ).exists():
+    if (
+        OperationalZone.objects.exclude(pk__in=assigned_ids)
+        .filter(pricing_band__isnull=False)
+        .exists()
+    ):
         conflicts.append("Unexpected zone assignments outside the approved 114 zones.")
     expected_pairs = {
         (vehicle, frozenset((origin, destination)))
@@ -54,7 +56,9 @@ def preview_rollout():
     codes = {band.pk: code for code, band in preview["bands"].items() if band}
     matrix_conflicts = {"bike": 0, "car": 0}
     forbidden = set()
-    general_rates = list(BandRate.objects.filter(Q(scope_key="general") | Q(organization__isnull=True)))
+    general_rates = list(
+        BandRate.objects.filter(Q(scope_key="general") | Q(organization__isnull=True))
+    )
     for rate in general_rates:
         origin, destination = codes.get(rate.origin_id), codes.get(rate.destination_id)
         key = (rate.vehicle, frozenset((origin, destination)))
@@ -66,7 +70,8 @@ def preview_rollout():
                 matrix_conflicts[rate.vehicle] += 1
         else:
             expected_amount = next(
-                amount for vehicle, a, b, amount in seed.matrix_config()
+                amount
+                for vehicle, a, b, amount in seed.matrix_config()
                 if (vehicle, frozenset((a, b))) == key
             )
             same_pair = sum(
@@ -75,8 +80,12 @@ def preview_rollout():
                 == frozenset((rate.origin_id, rate.destination_id))
                 for other in general_rates
             )
-            if (not rate.active or not rate.bidirectional or rate.amount != expected_amount
-                    or same_pair != 1):
+            if (
+                not rate.active
+                or not rate.bidirectional
+                or rate.amount != expected_amount
+                or same_pair != 1
+            ):
                 matrix_conflicts[rate.vehicle] += 1
         if rate.vehicle == "car" and ({origin, destination} & {"H", "I"}):
             forbidden.add(frozenset((origin, destination)))
@@ -103,7 +112,8 @@ def preview_rollout():
             for band in [preview["bands"][code]]
         ),
         bands_to_create=sum(band is None for band in preview["bands"].values()),
-        band_conflicts=len(unexpected) + sum(
+        band_conflicts=len(unexpected)
+        + sum(
             bool(band and (not band.active or band.display_order != order))
             for order, (code, _, _) in enumerate(seed.BANDS, 1)
             for band in [preview["bands"][code]]
@@ -139,18 +149,30 @@ def apply_rollout(*, actor):
     result = seed.apply_seed(preview)
     after = preview_rollout()
     if (
-        after["conflicts"] or after["bands_identical"] != 9
+        after["conflicts"]
+        or after["bands_identical"] != 9
         or after["assignments_matching"] != 114
-        or len(after["identical_matrix_rates"]) != 73 or after["hi_car_unset"] != 17
+        or len(after["identical_matrix_rates"]) != 73
+        or after["hi_car_unset"] != 17
         or protected_state() != before
     ):
         raise ValidationError("Post-apply integrity check failed; all changes rolled back.")
-    changed = preview["bands_to_create"] or preview["assignments_to_assign"] or preview["matrix_to_create"]
+    changed = (
+        preview["bands_to_create"]
+        or preview["assignments_to_assign"]
+        or preview["matrix_to_create"]
+    )
     if changed:
         emit_event(
-            actor=actor, kind="pricing.general_bands_applied", title="General pricing bands applied",
-            message="Approved General band configuration applied.", recipients=[],
-            payload={**result, "zones_changed": preview["assignments_to_assign"],
-                     "protected_state": before},
+            actor=actor,
+            kind="pricing.general_bands_applied",
+            title="General pricing bands applied",
+            message="Approved General band configuration applied.",
+            recipients=[],
+            payload={
+                **result,
+                "zones_changed": preview["assignments_to_assign"],
+                "protected_state": before,
+            },
         )
     return result

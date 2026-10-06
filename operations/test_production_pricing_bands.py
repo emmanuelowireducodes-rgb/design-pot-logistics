@@ -28,15 +28,22 @@ class ProductionPricingBandsTests(TestCase):
     def setUpTestData(cls):
         cls.zones = {
             name: OperationalZone.objects.create(name=name)
-            for _, _, names in seed.BANDS for name in names
+            for _, _, names in seed.BANDS
+            for name in names
         }
         cls.admin = User.objects.create_user("band-rollout-admin", role="admin")
         cls.organization = Organization.objects.create(name="Protected Client")
         for organization in (None, cls.organization):
-            card = price_cards.save_card(actor=cls.admin, name="Protected", organization=organization)
+            card = price_cards.save_card(
+                actor=cls.admin, name="Protected", organization=organization
+            )
             price_cards.save_route_price(
-                actor=cls.admin, card_id=card.pk, origin_id=cls.zones["Madina"].pk,
-                destination_id=cls.zones["Accra Central"].pk, bike_price="50", car_price="90",
+                actor=cls.admin,
+                card_id=card.pk,
+                origin_id=cls.zones["Madina"].pk,
+                destination_id=cls.zones["Accra Central"].pk,
+                bike_price="50",
+                car_price="90",
                 reason="Protected exact prices",
             )
         PremiumPricingRule.objects.create(value="20", enabled=True)
@@ -70,12 +77,18 @@ class ProductionPricingBandsTests(TestCase):
         self.assertEqual(OperationalZone.objects.exclude(pricing_band=None).count(), 114)
         self.assertEqual(BandRate.objects.filter(vehicle="bike").count(), 45)
         self.assertEqual(BandRate.objects.filter(vehicle="car").count(), 28)
-        codes = {band.pk: code for code, name, _ in seed.BANDS
-                 for band in [PricingBand.objects.get(name=name)]}
-        actual = {(row.vehicle, frozenset((codes[row.origin_id], codes[row.destination_id])), row.amount)
-                  for row in BandRate.objects.all()}
-        expected = {(vehicle, frozenset((a, b)), amount)
-                    for vehicle, a, b, amount in seed.matrix_config()}
+        codes = {
+            band.pk: code
+            for code, name, _ in seed.BANDS
+            for band in [PricingBand.objects.get(name=name)]
+        }
+        actual = {
+            (row.vehicle, frozenset((codes[row.origin_id], codes[row.destination_id])), row.amount)
+            for row in BandRate.objects.all()
+        }
+        expected = {
+            (vehicle, frozenset((a, b)), amount) for vehicle, a, b, amount in seed.matrix_config()
+        }
         self.assertEqual(actual, expected)
         preview = preview_rollout()
         self.assertEqual(preview["hi_car_unset"], 17)
@@ -85,7 +98,9 @@ class ProductionPricingBandsTests(TestCase):
         apply_rollout(actor=self.admin)
         self.run_preview()
         self.assertEqual(state, list(BandRate.objects.order_by("pk").values()))
-        self.assertEqual(DomainEvent.objects.filter(kind="pricing.general_bands_applied").count(), 1)
+        self.assertEqual(
+            DomainEvent.objects.filter(kind="pricing.general_bands_applied").count(), 1
+        )
 
     def test_missing_zone_refuses_apply(self):
         self.zones["American House"].delete()
@@ -121,21 +136,32 @@ class ProductionPricingBandsTests(TestCase):
     def test_forbidden_hi_car_rate_refuses_apply(self):
         seed.apply_seed()
         h = PricingBand.objects.get(name=seed.BANDS[7][1])
-        BandRate.objects.create(origin=h, destination=h, vehicle="car", amount="100", bidirectional=True)
+        BandRate.objects.create(
+            origin=h, destination=h, vehicle="car", amount="100", bidirectional=True
+        )
         self.assertEqual(preview_rollout()["hi_car_unset"], 16)
         self.assert_refused()
 
     def test_client_band_rates_preserved(self):
         seed.apply_seed()
         a = PricingBand.objects.get(name=seed.BANDS[0][1])
-        BandRate.objects.create(organization=self.organization, origin=a, destination=a,
-                                vehicle="bike", amount="42", bidirectional=True)
+        BandRate.objects.create(
+            organization=self.organization,
+            origin=a,
+            destination=a,
+            vehicle="bike",
+            amount="42",
+            bidirectional=True,
+        )
         before = protected_state()
         apply_rollout(actor=self.admin)
         self.assertEqual(protected_state(), before)
 
     def test_failure_rolls_back_bands_assignments_rates_and_audit(self):
-        with patch("operations.production_pricing_bands.emit_event", side_effect=RuntimeError("audit failed")):
+        with patch(
+            "operations.production_pricing_bands.emit_event",
+            side_effect=RuntimeError("audit failed"),
+        ):
             with self.assertRaises(RuntimeError):
                 apply_rollout(actor=self.admin)
         self.assertEqual(PricingBand.objects.count(), 0)
@@ -143,7 +169,10 @@ class ProductionPricingBandsTests(TestCase):
         self.assertFalse(OperationalZone.objects.exclude(pricing_band=None).exists())
 
     def test_protected_state_failure_rolls_back(self):
-        with patch("operations.production_pricing_bands.protected_state", side_effect=[{}, {"changed": True}]):
+        with patch(
+            "operations.production_pricing_bands.protected_state",
+            side_effect=[{}, {"changed": True}],
+        ):
             with self.assertRaises(ValidationError):
                 apply_rollout(actor=self.admin)
         self.assertEqual(PricingBand.objects.count(), 0)
@@ -182,7 +211,18 @@ class ProductionPricingBandsTests(TestCase):
         self.assertEqual(PricingBand.objects.count(), 0)
 
     def assert_refused(self):
-        before = (list(PricingBand.objects.values()), list(BandRate.objects.values()), protected_state())
+        before = (
+            list(PricingBand.objects.values()),
+            list(BandRate.objects.values()),
+            protected_state(),
+        )
         with self.assertRaises(ValidationError):
             apply_rollout(actor=self.admin)
-        self.assertEqual(before, (list(PricingBand.objects.values()), list(BandRate.objects.values()), protected_state()))
+        self.assertEqual(
+            before,
+            (
+                list(PricingBand.objects.values()),
+                list(BandRate.objects.values()),
+                protected_state(),
+            ),
+        )

@@ -13,7 +13,9 @@ class Command(BaseCommand):
     help = "Preview General pricing bands; production writes require --apply --actor ADMIN."
 
     def add_arguments(self, parser):
-        parser.add_argument("--apply", action="store_true", help="Apply the validated configuration.")
+        parser.add_argument(
+            "--apply", action="store_true", help="Apply the validated configuration."
+        )
         parser.add_argument("--actor", help="Existing active Admin username for audit history.")
 
     def handle(self, *args, **options):
@@ -31,7 +33,9 @@ class Command(BaseCommand):
         if preview["conflicts"]:
             raise CommandError("Conflicts found; no changes made.")
         if not options["apply"]:
-            self.stdout.write("PREVIEW COMPLETE; no writes made. Production apply is a separate operation.")
+            self.stdout.write(
+                "PREVIEW COMPLETE; no writes made. Production apply is a separate operation."
+            )
             return
         if not options["actor"]:
             raise CommandError("--actor is required with --apply; no changes made.")
@@ -47,7 +51,9 @@ class Command(BaseCommand):
         self.stdout.write("FixedRates, client pricing and Premium configuration unchanged.")
 
     def write_preview(self, preview):
-        self.stdout.write("Expected bands: 9; assigned zones: 114; Bike rows: 45; Car rows: 28; total rows: 73")
+        self.stdout.write(
+            "Expected bands: 9; assigned zones: 114; Bike rows: 45; Car rows: 28; total rows: 73"
+        )
         self.stdout.write("Expected unset H/I Car combinations: 17")
         self.stdout.write(
             f"PricingBands: identical={preview['bands_identical']}; "
