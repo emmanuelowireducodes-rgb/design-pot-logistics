@@ -1,26 +1,34 @@
+from datetime import timedelta
 from io import StringIO
 from unittest.mock import patch
 
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.core.management.base import CommandError
-from django.db import connection
+from django.db import connection, transaction
 from django.test import TestCase, override_settings
 from django.test.utils import CaptureQueriesContext
+from django.utils import timezone
 
 from . import general_pricing_band_seed as seed
 from . import price_cards
+from .general_price_handoff import import_general_dpot
 from .models import (
-    AreaAlias,
     BandRate,
     DomainEvent,
+    FixedRate,
     OperationalZone,
     Organization,
     PremiumPricingRule,
     PricingBand,
     User,
 )
-from .production_pricing_bands import apply_rollout, preview_rollout, protected_state
+from .production_pricing_bands import (
+    apply_rollout,
+    approved_exact_state,
+    preview_rollout,
+    protected_state,
+)
 
 
 class ProductionPricingBandsTests(TestCase):
@@ -33,7 +41,19 @@ class ProductionPricingBandsTests(TestCase):
         }
         cls.admin = User.objects.create_user("band-rollout-admin", role="admin")
         cls.organization = Organization.objects.create(name="Protected Client")
-        for organization in (None, cls.organization):
+        import_general_dpot(actor=cls.admin)
+        card = price_cards.current_rates().filter(card__scope_key="general").first().card
+        price_cards.save_route_price(
+            actor=cls.admin,
+            card_id=card.pk,
+            origin_id=cls.zones["Adenta"].pk,
+            destination_id=cls.zones["Madina"].pk,
+            bike_price="30",
+            car_price="45",
+            bidirectional=True,
+            reason="Approved Adenta-Madina exact overrides",
+        )
+        for organization in (cls.organization,):
             card = price_cards.save_card(
                 actor=cls.admin, name="Protected", organization=organization
             )
@@ -53,6 +73,74 @@ class ProductionPricingBandsTests(TestCase):
         output = StringIO()
         call_command("apply_general_pricing_bands", stdout=output, **options)
         return output.getvalue()
+
+    def test_approved_exact_guard_accepts_semantics_without_production_ids(self):
+        before = protected_state()
+        state = approved_exact_state()
+        self.assertFalse(state["conflicts"])
+        self.assertEqual(state["canonical"], {"bike": 114, "car": 79})
+        self.assertEqual(state["counts"], {"bike": 115, "car": 80})
+        self.assertEqual(len(state["overrides"]), 2)
+        self.assertEqual(before, protected_state())
+
+    def test_missing_canonical_rate_refuses_apply(self):
+        self.supersede(FixedRate.objects.filter(bidirectional=False).first(), active=False)
+        self.assert_refused()
+
+    def supersede(self, rate, **changes):
+        values = {
+            field.name: getattr(rate, field.name)
+            for field in FixedRate._meta.fields
+            if not field.primary_key
+        }
+        values.update(version=rate.version + 1, **changes)
+        return FixedRate.objects.create(**values)
+
+    def test_wrong_override_amounts_vehicles_direction_and_status_refuse(self):
+        for vehicle in ("bike", "car"):
+            rate = FixedRate.objects.get(
+                bidirectional=True, card__scope_key="general", vehicle=vehicle
+            )
+            for changes in (
+                {"amount": "999"},
+                {"vehicle": "car" if vehicle == "bike" else "bike"},
+                {"bidirectional": False},
+                {"active": False},
+                {"effective_at": timezone.now() + timedelta(days=1)},
+                {
+                    "effective_at": timezone.now() - timedelta(days=2),
+                    "expires_at": timezone.now() - timedelta(days=1),
+                },
+            ):
+                with self.subTest(vehicle=vehicle, changes=changes):
+                    with transaction.atomic():
+                        self.supersede(rate, **changes)
+                        self.assert_refused()
+                        transaction.set_rollback(True)
+
+    def test_historical_override_does_not_satisfy_guard(self):
+        rate = FixedRate.objects.get(bidirectional=True, card__scope_key="general", vehicle="bike")
+        values = {
+            field.name: getattr(rate, field.name)
+            for field in FixedRate._meta.fields
+            if not field.primary_key
+        }
+        values.update(version=2, active=False)
+        FixedRate.objects.create(**values)
+        self.assert_refused()
+
+    def test_third_unexpected_general_rate_refuses_apply(self):
+        card = FixedRate.objects.filter(card__scope_key="general").first().card
+        price_cards.save_route_price(
+            actor=self.admin,
+            card_id=card.pk,
+            origin_id=self.zones["Madina"].pk,
+            destination_id=self.zones["Accra Central"].pk,
+            bike_price="50",
+            car_price=None,
+            reason="Unexpected additional rate",
+        )
+        self.assert_refused()
 
     def test_preview_is_default_and_executes_no_writes(self):
         before = protected_state()
@@ -103,8 +191,10 @@ class ProductionPricingBandsTests(TestCase):
         )
 
     def test_missing_zone_refuses_apply(self):
-        self.zones["American House"].delete()
-        self.assert_refused()
+        resolution = seed.resolve_zone_assignments()
+        resolution["missing"] = ["American House"]
+        with patch.object(seed, "resolve_zone_assignments", return_value=resolution):
+            self.assert_refused()
 
     def test_ambiguous_mapping_refuses_apply(self):
         # Current schema forbids duplicate normalized names; verify the command
@@ -115,9 +205,10 @@ class ProductionPricingBandsTests(TestCase):
             self.assert_refused()
 
     def test_duplicate_mapping_refuses_apply(self):
-        self.zones["American House"].delete()
-        AreaAlias.objects.create(zone=self.zones["Madina"], name="American House")
-        self.assert_refused()
+        resolution = seed.resolve_zone_assignments()
+        resolution["duplicate_assignments"] = ["American House"]
+        with patch.object(seed, "resolve_zone_assignments", return_value=resolution):
+            self.assert_refused()
 
     def test_conflicting_assignment_refuses_apply(self):
         band = PricingBand.objects.create(name=seed.BANDS[0][1], display_order=1)

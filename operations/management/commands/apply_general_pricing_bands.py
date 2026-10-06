@@ -51,6 +51,18 @@ class Command(BaseCommand):
         self.stdout.write("FixedRates, client pricing and Premium configuration unchanged.")
 
     def write_preview(self, preview):
+        exact = preview["exact_state"]
+        self.stdout.write(
+            f"Canonical required exact rates: {exact['canonical']}; expected total=193"
+        )
+        for rate in exact["overrides"]:
+            self.stdout.write(
+                f"Approved additional exact override: {rate.pk}; Adenta <-> Madina; "
+                f"{rate.vehicle}; amount={rate.amount}; active/current/effective; bidirectional"
+            )
+        self.stdout.write(
+            f"Approved available General Standard exact rates: {exact['counts']}; expected total=195"
+        )
         self.stdout.write(
             "Expected bands: 9; assigned zones: 114; Bike rows: 45; Car rows: 28; total rows: 73"
         )
